@@ -30,7 +30,10 @@ import search  # noqa: E402
 
 DECK = ptcg.load_deck(os.path.join(_here(), "deck.csv"))
 
-BUDGET = int(os.environ.get("PTCG_BUDGET", "64"))
+# 既定値は実測に基づく。64 -> 54.8%、256 -> 64.0% (対 agents/baseline)。
+# 1 手あたり平均 218ms、1 試合の思考時間 3〜20 秒。cabt.json の持ち時間は
+# 1 エピソード 600 秒なので余裕がある。
+BUDGET = int(os.environ.get("PTCG_BUDGET", "256"))
 DETERMINIZATIONS = int(os.environ.get("PTCG_DETERMINIZATION", "2"))
 MIN_PER_OPTION = 2
 
