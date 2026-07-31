@@ -53,6 +53,7 @@ def main() -> None:
     ap.add_argument("-n", "--games", type=int, default=20)
     ap.add_argument("-j", "--jobs", type=int, default=1, help="並列プロセス数")
     ap.add_argument("--no-swap", action="store_true", help="先後の入れ替えをしない")
+    ap.add_argument("--progress", type=int, default=0, metavar="N", help="N 試合ごとに途中経過を出す")
     args = ap.parse_args()
 
     a0, a1 = resolve(args.agent0), resolve(args.agent1)
@@ -61,23 +62,39 @@ def main() -> None:
         swap = (not args.no_swap) and (i % 2 == 1)
         jobs.append((a1, a0) if swap else (a0, a1))
 
-    t0 = time.time()
-    if args.jobs > 1:
-        with cf.ProcessPoolExecutor(max_workers=args.jobs) as ex:
-            raw = list(ex.map(play, jobs))
-    else:
-        raw = [play(j) for j in jobs]
-
-    # player0 視点の reward を agent0 視点に直す
-    results = []
+    results: list[int] = []
     bad = collections.Counter()
-    for i, (r, statuses) in enumerate(raw):
+
+    def record(i: int, r: int, statuses: list[str]) -> None:
+        """player0 視点の reward を agent0 視点に直して積む。"""
         swap = (not args.no_swap) and (i % 2 == 1)
         results.append(-r if swap else r)
         for side, st in enumerate(statuses):
             if st not in ("DONE", "ACTIVE", "INACTIVE"):
                 who = args.agent1 if (swap ^ (side == 1)) else args.agent0
                 bad[f"{who}:{st}"] += 1
+
+    def tally(elapsed: float) -> str:
+        w = results.count(1)
+        n = len(results)
+        return f"  {n}/{args.games}  win {w}  winrate {w / n:.1%}  ({elapsed:.0f}s)"
+
+    t0 = time.time()
+    # 途中経過を出す。長時間の実行が中断されても、どこまで進んだか分かるようにする。
+    if args.jobs > 1:
+        with cf.ProcessPoolExecutor(max_workers=args.jobs) as ex:
+            futures = {ex.submit(play, job): i for i, job in enumerate(jobs)}
+            for fut in cf.as_completed(futures):
+                r, statuses = fut.result()
+                record(futures[fut], r, statuses)
+                if args.progress and len(results) % args.progress == 0:
+                    print(tally(time.time() - t0), flush=True)
+    else:
+        for i, job in enumerate(jobs):
+            r, statuses = play(job)
+            record(i, r, statuses)
+            if args.progress and len(results) % args.progress == 0:
+                print(tally(time.time() - t0), flush=True)
 
     w = results.count(1)
     l = results.count(-1)
