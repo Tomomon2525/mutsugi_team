@@ -66,16 +66,20 @@ def choose(obs: dict) -> list[int]:
             root = s.begin(obs, DECK)
             if root is None:
                 break
-            for i in range(n):
-                for _ in range(max(1, per_option // DETERMINIZATIONS)):
-                    child = s.step(root.search_id, [i])
-                    if child is None:
-                        break
-                    r = s.playout(child, my_index)
-                    if r is None:
-                        continue
-                    score[i] += r
-                    played[i] += 1
+            try:
+                for i in range(n):
+                    for _ in range(max(1, per_option // DETERMINIZATIONS)):
+                        child = s.step(root.search_id, [i])
+                        if child is None:
+                            break
+                        # playout は通過したノードを child ごと解放する
+                        r = s.playout(child, my_index)
+                        if r is None:
+                            continue
+                        score[i] += r
+                        played[i] += 1
+            finally:
+                s.release(root.search_id)
     finally:
         s.end()
 
