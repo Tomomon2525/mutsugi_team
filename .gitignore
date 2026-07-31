@@ -7,9 +7,11 @@ scratch/
 kaggle.json
 data/
 
-# 公式パッケージ (再配布禁止) とその生成物は置かない
+# 公式パッケージ本体 (再配布禁止) は置かない。
+# shared/enums.py は例外として追跡する。機構名の対応表のみで、カード名・カードテキストを
+# 含まないため。各自が gen_enums.py を回さずに済むようにする狙い。
 pokemon-tcg-ai-battle/
 ptcg_engine/
-shared/enums.py
+*.pdf
 *.csv
 !agents/*/deck.csv

@@ -1,7 +1,8 @@
 """公式エンジンの C++ ヘッダから Enum 定義を抜き出し、shared/enums.py を生成する。
 
 公式パッケージは再配布が禁じられているため、リポジトリには含めない。各自が Kaggle から
-ダウンロードした手元のコピーを読ませる。生成物 shared/enums.py も git 管理外である。
+ダウンロードした手元のコピーを読ませる。生成物 shared/enums.py は機構名の定数だけで
+カード名・カードテキストを含まないため、こちらは追跡対象としている。
 
   .venv/bin/python tools/gen_enums.py
   .venv/bin/python tools/gen_enums.py --src ~/Downloads/pokemon-tcg-ai-battle
@@ -119,7 +120,7 @@ def main() -> None:
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write('"""自動生成。直接編集しない。tools/gen_enums.py で再生成する。\n\n')
-        f.write("公式エンジンのヘッダから抽出した定数である。git 管理外。\n")
+        f.write("公式エンジンのヘッダから抽出した機構名の定数である。カード名・カードテキストは含まない。\n")
         f.write('"""\n\nfrom enum import IntEnum\n\n\n')
         f.write("\n\n\n".join(blocks))
         f.write("\n")

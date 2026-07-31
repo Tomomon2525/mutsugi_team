@@ -19,18 +19,17 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 ここまでで `tools/evaluate.py` と `tools/replay.py` は動く。エンジンは pip 経由で入るため、コンペページからのダウンロードは要らない。
 
-### 2. 公式パッケージの取得（カードデータの Enum を使う場合）
+### 2. 公式パッケージ（原則として不要）
 
-コンペページから配布物一式をダウンロードし、任意の場所に展開する。既定では `~/Downloads/pokemon-tcg-ai-battle` を見る。
+`shared/enums.py` はリポジトリに入れてあるため、通常は何もダウンロードしなくてよい。カードデータもエンジンが実行時に返す。
+
+エンジンが更新されて Enum がずれた場合のみ、コンペページから配布物を取得して再生成する。
 
 ```bash
-.venv/bin/python tools/gen_enums.py
-.venv/bin/python tools/gen_enums.py --src /path/to/pokemon-tcg-ai-battle   # 別の場所なら
+.venv/bin/python tools/gen_enums.py --src /path/to/pokemon-tcg-ai-battle
 ```
 
-`shared/enums.py` が生成される。無くても動くが、`select.type` などが数値のまま表示される。
-
-**公式パッケージはリポジトリに入れない。** 同梱 README に「共有・再配布しない、コンペ終了後に削除する」と明記されており、カード名・テキスト・エンジンコードとその派生物は権利者に帰属する。`.gitignore` で弾いてあるが、`git add -f` で押し込まないこと。
+**公式パッケージ本体はリポジトリに入れない。** 同梱 README に「共有・再配布しない、コンペ終了後に削除する」と明記されており、カード名・テキスト・エンジンコードとその派生物は権利者に帰属する。PDF は GitHub の 100MB 制限も超える。`.gitignore` で弾いてあるが `git add -f` で押し込まないこと。
 
 ### 3. Kaggle の認証（提出・データ取得をする場合）
 
@@ -61,7 +60,7 @@ ptcg-abc/
 │       └── deck.csv          60 枚の card ID
 ├── shared/
 │   ├── ptcg.py               カード・ワザの参照、選択肢の可読化
-│   └── enums.py              自動生成 (git 管理外)
+│   └── enums.py              gen_enums.py が生成した定数 (追跡対象)
 ├── tools/
 │   ├── evaluate.py           ローカル対戦で勝率を測る
 │   ├── build_submission.py   submission.tar.gz を作り、展開して検証対戦
