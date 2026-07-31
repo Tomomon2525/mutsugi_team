@@ -14,6 +14,11 @@ import time
 
 BUILTIN = {"random", "first"}
 
+# 提出物では shared/*.py が main.py と同じ階層に置かれるが、ローカル評価では
+# エージェントのディレクトリから直接読む。`import ptcg` を両方で通すために
+# リポジトリの shared/ を sys.path に足しておく。
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "shared"))
+
 
 def resolve(spec: str) -> str:
     if spec in BUILTIN:

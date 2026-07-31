@@ -8,7 +8,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from evaluate import resolve  # noqa: E402
+from evaluate import resolve  # noqa: E402  (shared/ の sys.path 追加も evaluate 側で行われる)
 
 
 def main() -> None:
