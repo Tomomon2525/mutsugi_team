@@ -19,7 +19,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=None, help="observation を書き出す JSONL パス")
     ap.add_argument("--summary", action="store_true", help="select.type / context の出現数を集計")
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("-n", "--games", type=int, default=1, help="回す試合数")
     args = ap.parse_args()
 
     from kaggle_environments import make
@@ -38,10 +38,11 @@ def main() -> None:
         hi = min(int(sel.get("maxCount") or 0), n)
         return random.sample(range(n), hi)
 
-    env = make("cabt", configuration={"seed": args.seed})
-    env.run([probe_agent, probe_agent])
+    for _ in range(args.games):
+        env = make("cabt")
+        env.run([probe_agent, probe_agent])
 
-    print(f"selections: {len(records)}  result: {[a.reward for a in env.steps[-1]]}")
+    print(f"games: {args.games}  selections: {len(records)}")
 
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

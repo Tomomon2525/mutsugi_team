@@ -27,8 +27,12 @@ def resolve(spec: str) -> str:
 
 
 def play(args) -> tuple[int, list[str]]:
-    """1 試合。戻り値は (player0 視点の reward, 両者の status)。"""
-    a0, a1, _seed = args
+    """1 試合。戻り値は (player0 視点の reward, 両者の status)。
+
+    エンジンの乱数は native 側にあり seed を固定できない。同じ組み合わせでも
+    毎回違う試合になるので、勝率の比較には試合数が要る。
+    """
+    a0, a1 = args
     from kaggle_environments import make
 
     env = make("cabt")
@@ -50,7 +54,7 @@ def main() -> None:
     jobs = []
     for i in range(args.games):
         swap = (not args.no_swap) and (i % 2 == 1)
-        jobs.append((a1, a0, i) if swap else (a0, a1, i))
+        jobs.append((a1, a0) if swap else (a0, a1))
 
     t0 = time.time()
     if args.jobs > 1:
