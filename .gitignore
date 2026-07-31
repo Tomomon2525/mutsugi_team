@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+scratch/
+*.tar.gz
+.DS_Store
+kaggle.json
+data/

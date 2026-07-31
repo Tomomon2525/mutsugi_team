@@ -1,0 +1,6 @@
+# Kaggle 側のランタイムに合わせてバージョンを固定する。
+# 上げる前に必ず tools/build_submission.py の検証対戦を通すこと。
+kaggle-environments==1.32.2
+kaggle
+numpy
+pandas
