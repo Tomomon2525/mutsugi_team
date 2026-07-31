@@ -19,7 +19,20 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 ここまでで `tools/evaluate.py` と `tools/replay.py` は動く。エンジンは pip 経由で入るため、コンペページからのダウンロードは要らない。
 
-### 2. Kaggle の認証（提出・データ取得をする場合）
+### 2. 公式パッケージの取得（カードデータの Enum を使う場合）
+
+コンペページから配布物一式をダウンロードし、任意の場所に展開する。既定では `~/Downloads/pokemon-tcg-ai-battle` を見る。
+
+```bash
+.venv/bin/python tools/gen_enums.py
+.venv/bin/python tools/gen_enums.py --src /path/to/pokemon-tcg-ai-battle   # 別の場所なら
+```
+
+`shared/enums.py` が生成される。無くても動くが、`select.type` などが数値のまま表示される。
+
+**公式パッケージはリポジトリに入れない。** 同梱 README に「共有・再配布しない、コンペ終了後に削除する」と明記されており、カード名・テキスト・エンジンコードとその派生物は権利者に帰属する。`.gitignore` で弾いてあるが、`git add -f` で押し込まないこと。
+
+### 3. Kaggle の認証（提出・データ取得をする場合）
 
 コンペページで規約に同意したうえで、アカウント設定から API トークンを発行し `~/.kaggle/kaggle.json` に置く。パーミッションは 600 にする。これがないと `kaggle` コマンドは一切通らない。
 
@@ -28,7 +41,7 @@ chmod 600 ~/.kaggle/kaggle.json
 .venv/bin/kaggle competitions list -s pokemon-tcg   # 疎通確認
 ```
 
-### 3. GitHub の認証（push をする場合）
+### 4. GitHub の認証（push をする場合）
 
 ```bash
 gh auth login
@@ -46,13 +59,19 @@ ptcg-abc/
 │   └── baseline/
 │       ├── main.py           エージェント本体
 │       └── deck.csv          60 枚の card ID
+├── shared/
+│   ├── ptcg.py               カード・ワザの参照、選択肢の可読化
+│   └── enums.py              自動生成 (git 管理外)
 ├── tools/
 │   ├── evaluate.py           ローカル対戦で勝率を測る
-│   ├── build_submission.py   検証対戦 → submission.tar.gz
-│   ├── probe_obs.py          observation をダンプして Enum を逆引きする
-│   └── replay.py             公式ビジュアライザで HTML リプレイを出力
+│   ├── build_submission.py   submission.tar.gz を作り、展開して検証対戦
+│   ├── probe_obs.py          observation の観察
+│   ├── replay.py             公式ビジュアライザで HTML リプレイを出力
+│   └── gen_enums.py          公式ヘッダから shared/enums.py を生成
 └── scratch/                  一時ファイル置き場 (git 管理外)
 ```
+
+`shared/*.py` は提出時に tar のトップレベルへ自動で同梱される。エージェント側からは `import ptcg` で使える。
 
 ## 使い方
 
@@ -62,8 +81,14 @@ cd ~/Desktop/Kaggle/ptcg-abc
 # ベースライン vs ランダム、20 戦を 6 並列で
 .venv/bin/python tools/evaluate.py agents/baseline random -n 20 -j 6
 
-# observation の中身を見る
-.venv/bin/python tools/probe_obs.py --summary --out scratch/obs.jsonl
+# デッキの中身をカード名で確認
+.venv/bin/python shared/ptcg.py agents/baseline/deck.csv
+
+# 選択肢が何なのかを人間可読で見る
+.venv/bin/python tools/probe_obs.py --explain 20
+
+# observation の中身を JSONL に落とす
+.venv/bin/python tools/probe_obs.py --summary -n 5 --out scratch/obs.jsonl
 
 # リプレイを HTML で書き出してブラウザで開く
 .venv/bin/python tools/replay.py agents/baseline random -o scratch/replay.html
@@ -117,9 +142,33 @@ observation の主なキーは `logs`（前回の選択以降のイベント列�
 - 実行時に `__file__` が存在しない。`deck.csv` の場所は `co_filename` から復元している（`main.py` の `_here()`）。
 - エージェントとして採用されるのは、モジュール内で**最後に定義された callable**。`agent` より後に関数やクラスを足すと壊れる。
 
-## 未取得のもの
+## カードデータの参照
 
-公式ドキュメント <https://matsuoinstitute.github.io/cabt/> には `cabt.api` として `all_card_data()` や `search_begin()` / `search_step()` / `search_end()` が載っているが、`kaggle-environments` 同梱の `cg` モジュールには含まれていない。カードのメタデータと先読み探索を使うには、コンペページ配布の SDK を別途取得する必要がある。PyPI に `cabt` パッケージは存在しない。
+`kaggle-environments` に同梱されている `libcg` は `AllCard` / `AllAttack` を公開している。カードデータは実行時にエンジンから取れるので、CSV を提出物に持ち込む必要はない。Kaggle 側でも同じエンジンが動く。
+
+```python
+import ptcg
+
+ptcg.card(722)     # {'cardId': 722, 'name': 'Snover', 'hp': 90, 'attacks': [1044, 1045], ...}
+ptcg.attack(1044)  # {'attackId': 1044, 'name': 'Beat', 'damage': 10, 'energies': [3]}
+ptcg.name(722)     # 'Snover'
+
+ptcg.describe_option(option, obs)   # "Attack: Beat dmg=10 cost=W"
+ptcg.describe_select(sel, obs)      # 選択肢を一覧で
+ptcg.deck_summary(deck)             # デッキを種別ごとに集計
+```
+
+`card()` の主な項目は `name` `cardType` `hp` `pokemonType` `weakness` `resistance` `retreatCost` `evolvesFrom` `ex` `attacks` `skills`。`attack()` は `name` `damage` `energies` `text`。
+
+### 数値 Enum の注意
+
+`select.type` と `select.context` は、エンジン側の enum から **1 を引いた値**で JSON に書かれている（`ToJson.h` の `SelectJson`）。先頭の `None` が現れないためである。`option.type` と `logs[].type` は生の値なのでずれない。`tools/gen_enums.py` はこの差を織り込んで生成する。
+
+### 先読み探索
+
+`libcg` は `SearchBegin` / `SearchStep` / `SearchEnd` も公開している。`cg/sim.py` が `ctypes` の宣言をしていないだけなので、自前で宣言すれば呼べるはずである。未検証。
+
+## Kaggle への提出
 
 Kaggle CLI は `requirements.txt` に含めてある。認証を通せば以下が使える。
 
@@ -131,8 +180,8 @@ Kaggle CLI は `requirements.txt` に含めてある。認証を通せば以下�
 
 ## 当面の課題
 
-`score_option()` が定数を返す状態なので、ベースラインは実質「先頭から maxCount 個選ぶ」だけの挙動である。ランダム相手には 9 割勝つが、それは相手が弱すぎるからにすぎない。
+`score_option()` が定数を返す状態なので、ベースラインは実質「先頭から maxCount 個選ぶ」だけの挙動である。組み込みの `first` エージェントと 100 戦して 51% だった。ランダム相手には 9 割勝つが、それは相手が弱すぎるからにすぎない。
 
-- `select.type` と `context` の整数が何を意味するかを `probe_obs.py` の出力から特定する
+- `score_option()` を書く。カードデータとワザのダメージが引けるようになったので、材料は揃っている
 - デッキを差し替えて勝率を比較する（既存の分析では、エージェントの精緻さよりデッキ選択のほうが Elo への寄与が大きいとされる）
-- `search_*` API が入手できれば、1 手先読みまたは MCTS に進める
+- `SearchBegin` / `SearchStep` / `SearchEnd` を `ctypes` で叩き、1 手先読みまたは MCTS に進める

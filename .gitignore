@@ -6,3 +6,10 @@ scratch/
 .DS_Store
 kaggle.json
 data/
+
+# 公式パッケージ (再配布禁止) とその生成物は置かない
+pokemon-tcg-ai-battle/
+ptcg_engine/
+shared/enums.py
+*.csv
+!agents/*/deck.csv

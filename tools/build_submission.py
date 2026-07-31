@@ -13,6 +13,9 @@ import tarfile
 EXCLUDE_DIRS = {"__pycache__", ".git", ".venv", ".ipynb_checkpoints"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".tar.gz", ".zip"}
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SHARED = os.path.join(ROOT, "shared")
+
 
 def check(agent_dir: str) -> None:
     main_py = os.path.join(agent_dir, "main.py")
@@ -36,18 +39,27 @@ def check(agent_dir: str) -> None:
         sys.exit(f"deck.csv は 60 枚である必要がある (現在 {n} 枚)")
 
 
-def validate(agent_dir: str) -> None:
-    """Kaggle 側の検証と同じく自分自身と 1 戦させ、異常終了しないか確かめる。"""
+def validate(tar_path: str) -> None:
+    """Kaggle 側の検証と同じく自分自身と 1 戦させる。
+
+    エージェントディレクトリではなく tar を展開して実行する。shared/ の同梱漏れなど、
+    提出物の形でしか出ない不具合をここで捕まえるためである。
+    """
+    import tempfile
+
     from kaggle_environments import make
 
-    main_py = os.path.join(agent_dir, "main.py")
-    env = make("cabt")
-    env.run([main_py, main_py])
-    statuses = [a.status for a in env.steps[-1]]
-    if any(s not in ("DONE", "ACTIVE", "INACTIVE") for s in statuses):
-        err = env.steps[0][0].get("error")
-        sys.exit(f"検証対戦に失敗: statuses={statuses} error={err}")
-    print(f"validation game: OK ({len(env.steps)} steps, statuses={statuses})")
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(tar_path) as tar:
+            tar.extractall(tmp)
+        main_py = os.path.join(tmp, "main.py")
+        env = make("cabt")
+        env.run([main_py, main_py])
+        statuses = [a.status for a in env.steps[-1]]
+        if any(s not in ("DONE", "ACTIVE", "INACTIVE") for s in statuses):
+            err = env.steps[0][0].get("error")
+            sys.exit(f"検証対戦に失敗: statuses={statuses} error={err}")
+        print(f"validation game: OK ({len(env.steps)} steps, statuses={statuses})")
 
 
 def build(agent_dir: str, out: str) -> str:
@@ -62,6 +74,11 @@ def build(agent_dir: str, out: str) -> str:
     with tarfile.open(out, "w:gz") as tar:
         for name in sorted(os.listdir(agent_dir)):
             tar.add(os.path.join(agent_dir, name), arcname=name, filter=filt)
+        # shared/ の中身は tar のトップレベルに置く。kaggle_environments は main.py のある
+        # ディレクトリを sys.path に足すので、`import ptcg` がそのまま通る。
+        for name in sorted(os.listdir(SHARED)) if os.path.isdir(SHARED) else []:
+            if name.endswith(".py") and not os.path.exists(os.path.join(agent_dir, name)):
+                tar.add(os.path.join(SHARED, name), arcname=name, filter=filt)
     return out
 
 
@@ -76,9 +93,9 @@ def main() -> None:
     out = args.out or os.path.join(agent_dir, "submission.tar.gz")
 
     check(agent_dir)
-    if not args.skip_validate:
-        validate(agent_dir)
     build(agent_dir, out)
+    if not args.skip_validate:
+        validate(out)
 
     size = os.path.getsize(out)
     print(f"built: {out} ({size / 1024:.1f} KiB)")
