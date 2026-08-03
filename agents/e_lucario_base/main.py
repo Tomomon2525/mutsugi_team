@@ -121,7 +121,7 @@ UCB_C = float(CONFIG.get("ucb_c", os.environ.get("PTCG_UCB_C", "0.7")))
 # ルール評価を「何回ぶんのロールアウトとみなすか」。0 で無効。
 # 1 手あたり 1 候補 8 回程度しか試行できない場面があり、そこでは勝率平均が
 # ほぼ雑音になる。ルールを弱い事前値として入れて、試行が増えたら薄める。
-PRIOR = float(CONFIG.get("prior", os.environ.get("PTCG_PRIOR", "0")))
+PRIOR = float(CONFIG.get("prior", os.environ.get("PTCG_PRIOR", "1.5")))
 
 # 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
 # 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
