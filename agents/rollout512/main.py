@@ -3,23 +3,14 @@
 各選択肢について「そこから終局まで適当に打つ」を何回か繰り返し、勝率が最も高い
 選択肢を選ぶ。評価関数は持たない。勝敗そのものを価値とする。
 
-学習はしない。1 手ごとに探索し、終わったら捨てる。
-
-回数ではなく時間で予算を切る。cabt は 1 エピソードにつきエージェント 1 体あたり
-600 秒の持ち時間を与え、残量を obs["remainingOverageTime"] で毎手知らせてくる。
-デッキによって 1 ロールアウトの長さが 7 倍以上変わるうえ、Kaggle の実行環境は
-手元より 8〜9 倍遅い。固定回数だと、この二つが重なった時点で持ち時間を使い切る。
-
-  PTCG_MAX_SLICE   1 手に使う秒数の上限
-  PTCG_RESERVE     使い切らずに残す秒数
-  PTCG_HORIZON     残り何手ぶんに割るとみなすか
-  PTCG_TIME_POOL   remainingOverageTime が無い環境 (ローカル評価) での持ち時間
+学習はしない。1 手ごとに探索し、終わったら捨てる。強さは以下で決まる。
+  - PTCG_BUDGET          1 手あたりのロールアウト総数
+  - PTCG_DETERMINIZATION 隠れ情報の推定を何通り試すか
 """
 
 import os
 import random
 import sys
-import time
 
 
 def _here() -> str:
@@ -39,25 +30,14 @@ import search  # noqa: E402
 
 DECK = ptcg.load_deck(os.path.join(_here(), "deck.csv"))
 
-# 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
-# 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
-# やや小さく取り、序盤に厚く配る。
-MAX_SLICE = float(os.environ.get("PTCG_MAX_SLICE", "5.0"))
-MIN_SLICE = float(os.environ.get("PTCG_MIN_SLICE", "0.2"))
-RESERVE = float(os.environ.get("PTCG_RESERVE", "45"))
-HORIZON = float(os.environ.get("PTCG_HORIZON", "70"))
-TIME_POOL = float(os.environ.get("PTCG_TIME_POOL", "600"))
-# ローカルの kaggle_environments は runTimeout の 2000 秒をそのまま
-# remainingOverageTime として渡してくる。Kaggle 本番の 600 秒を模したい場合は
-# PTCG_TIME_POOL を明示すると、observation 側の値を無視して自前で数える。
-FORCE_POOL = "PTCG_TIME_POOL" in os.environ
-
+# 既定値は実測に基づく。64 -> 54.8%、256 -> 64.0% (対 agents/baseline)。
+# 1 手あたり平均 218ms、1 試合の思考時間 3〜20 秒。cabt.json の持ち時間は
+# 1 エピソード 600 秒なので余裕がある。
+BUDGET = int(os.environ.get("PTCG_BUDGET512", "512"))
 DETERMINIZATIONS = int(os.environ.get("PTCG_DETERMINIZATION", "2"))
-MAX_ROLLOUTS = int(os.environ.get("PTCG_MAX_ROLLOUTS", "4096"))
+MIN_PER_OPTION = 2
 
 _searcher: search.Searcher | None = None
-# remainingOverageTime が来ない環境では自前で持ち時間を減らして模倣する
-_pool = TIME_POOL
 
 
 def searcher() -> search.Searcher:
@@ -65,13 +45,6 @@ def searcher() -> search.Searcher:
     if _searcher is None:
         _searcher = search.Searcher()
     return _searcher
-
-
-def slice_seconds(obs: dict) -> float:
-    rem = None if FORCE_POOL else obs.get("remainingOverageTime")
-    if rem is None:
-        rem = _pool
-    return max(MIN_SLICE, min(MAX_SLICE, (float(rem) - RESERVE) / HORIZON))
 
 
 def choose(obs: dict) -> list[int]:
@@ -85,41 +58,29 @@ def choose(obs: dict) -> list[int]:
     if n <= 1 or hi != 1:
         return list(range(hi if hi > 0 else lo))
 
-    deadline = time.monotonic() + slice_seconds(obs)
+    per_option = max(MIN_PER_OPTION, BUDGET // n)
     my_index = obs["current"]["yourIndex"]
     score = [0.0] * n
     played = [0] * n
-    total = 0
 
     s = searcher()
     try:
-        for d in range(DETERMINIZATIONS):
-            # 2 通り目以降は、時間が余っている場合だけ引き直す
-            if d and time.monotonic() >= deadline:
-                break
+        for _ in range(DETERMINIZATIONS):
             root = s.begin(obs, DECK)
             if root is None:
                 break
             try:
-                while total < MAX_ROLLOUTS:
-                    ran = 0
-                    for i in range(n):
-                        # 全選択肢を 1 度は試す。未試行を残すと比較にならない。
-                        if time.monotonic() >= deadline and played[i]:
-                            continue
+                for i in range(n):
+                    for _ in range(max(1, per_option // DETERMINIZATIONS)):
                         child = s.step(root.search_id, [i])
                         if child is None:
-                            continue
+                            break
                         # playout は通過したノードを child ごと解放する
                         r = s.playout(child, my_index)
-                        total += 1
-                        ran += 1
                         if r is None:
                             continue
                         score[i] += r
                         played[i] += 1
-                    if ran == 0 or time.monotonic() >= deadline:
-                        break
             finally:
                 s.release(root.search_id)
     finally:
@@ -143,11 +104,8 @@ def legal_fallback(obs: dict) -> list[int]:
 
 
 def agent(obs: dict) -> list[int]:
-    global _pool
     if obs.get("select") is None:
-        _pool = TIME_POOL
         return list(DECK)
-    t0 = time.monotonic()
     try:
         picked = choose(obs)
         sel = obs["select"]
@@ -159,5 +117,3 @@ def agent(obs: dict) -> list[int]:
         return picked
     except Exception:
         return legal_fallback(obs)
-    finally:
-        _pool -= time.monotonic() - t0
