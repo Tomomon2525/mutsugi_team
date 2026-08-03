@@ -1,0 +1,7 @@
+{
+  "public_score": 572.6,
+  "submitted": "2026-08-03T09:20:05Z",
+  "commit": "25fe905",
+  "deck": "d0_grimmsnarl (Marnie's Grimmsnarl ex)",
+  "note": "ルールベース方策 + 60手打ち切り + UCB1。旧版に 92.5% (80戦)"
+}

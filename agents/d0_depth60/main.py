@@ -35,11 +35,61 @@ def _here() -> str:
     return os.getcwd()
 
 
-sys.path.insert(0, _here())
+def _load_shared() -> dict:
+    """自分のディレクトリにある共有モジュールを、自分専用の名前で読み込む。
 
-import policy  # noqa: E402
-import ptcg  # noqa: E402
-import search  # noqa: E402
+    対戦の両側が同じプロセスで動くため、`import policy` と書くと sys.modules を
+    奪い合う。過去バージョンを凍結して対戦相手にすると、先に読み込まれたほうの
+    policy.py が両者に適用され、片方が壊れる。
+
+    exec_module が終わった時点で、各モジュールの globals は兄弟モジュールの実体を
+    直接掴んでいる。したがって、読み込みの間だけ素の名前を差し替え、終わったら
+    元に戻せば、エージェントごとに独立した組を持てる。
+    """
+    import importlib.util
+
+    here = _here()
+    tag = "%08x" % (abs(hash(here)) & 0xFFFFFFFF)
+    order = ("enums", "ptcg", "policy", "search")
+    saved = {n: sys.modules.get(n) for n in order}
+    mods: dict = {}
+    try:
+        for name in order:
+            # 提出物では main.py と同じ階層に並ぶ。ローカル評価ではリポジトリの
+            # shared/ を tools が sys.path へ足しているので、そちらから拾う。
+            # 他のエージェントのディレクトリ (deck.csv がある) は候補から外す。
+            # 凍結した過去バージョンが sys.path の先頭に自分を差し込むため、
+            # 除外しないと相手のモジュールを掴んでしまう。
+            cands = [here] + [
+                d for d in sys.path
+                if d and not os.path.isfile(os.path.join(d, "deck.csv"))
+            ]
+            path = next(
+                (p for p in (os.path.join(d, name + ".py") for d in cands)
+                 if os.path.isfile(p)),
+                None,
+            )
+            if path is None:
+                continue
+            spec = importlib.util.spec_from_file_location(f"{name}__{tag}", path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            sys.modules[name] = mod  # 兄弟が素の名前で import できるようにする
+            spec.loader.exec_module(mod)
+            mods[name] = mod
+    finally:
+        for n, old in saved.items():
+            if old is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = old
+    return mods
+
+
+_SHARED = _load_shared()
+policy = _SHARED["policy"]
+ptcg = _SHARED["ptcg"]
+search = _SHARED["search"]
 
 DECK = ptcg.load_deck(os.path.join(_here(), "deck.csv"))
 
@@ -61,6 +111,7 @@ def _config() -> dict:
 CONFIG = _config()
 USE_POLICY = CONFIG.get("policy")
 DEPTH = CONFIG.get("depth")
+PROFILE = policy.Profile(CONFIG)
 
 # 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
 # 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。
@@ -156,7 +207,7 @@ def choose(obs: dict) -> list[int]:
     if n <= 1 or hi != 1:
         if USE_POLICY is False:
             return list(range(hi if hi > 0 else lo))
-        return policy.picks(obs, random, eps=0.0, jitter=0.0)
+        return policy.picks(obs, random, eps=0.0, jitter=0.0, prof=PROFILE)
 
     _stat["searched"] = 1
     deadline = time.monotonic() + slice_seconds(obs)
@@ -187,7 +238,8 @@ def choose(obs: dict) -> list[int]:
                         _stat["step_none"] += 1
                         continue
                     # playout は通過したノードを child ごと解放する
-                    r = s.playout(child, my_index, use_policy=USE_POLICY, depth=DEPTH)
+                    r = s.playout(child, my_index, use_policy=USE_POLICY,
+                                  depth=DEPTH, profile=PROFILE)
                     total += 1
                     if r is not None:
                         score[i] += r

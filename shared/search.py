@@ -238,6 +238,7 @@ class Searcher:
         max_steps: int = 2000,
         use_policy: bool | None = None,
         depth: int | None = None,
+        profile: "policy.Profile | None" = None,
     ) -> float | None:
         """終局まで打つ。1 勝ち / 0 引き分け / -1 負け。決着しなければ None。
 
@@ -255,6 +256,7 @@ class Searcher:
         # A/B 比較のため、呼び出し側 (エージェントごとの config.json) から上書きできる。
         use_policy = USE_POLICY if use_policy is None else use_policy
         depth = DEPTH if depth is None else depth
+        profile = policy.DEFAULT if profile is None else profile
         steps = 0
         try:
             while steps < max_steps:
@@ -271,7 +273,7 @@ class Searcher:
                 if not sel or not sel.get("option"):
                     return None
                 if use_policy:
-                    picks = policy.picks(node.obs, random)
+                    picks = policy.picks(node.obs, random, prof=profile)
                 else:
                     n = len(sel["option"])
                     hi = min(int(sel.get("maxCount") or 0), n) or 1

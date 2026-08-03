@@ -21,6 +21,32 @@ import ptcg
 
 EPS = float(os.environ.get("PTCG_EPS", "0.25"))
 
+
+class Profile:
+    """方策の設定。エージェントごとの config.json から作る。
+
+    対戦の両側が同じプロセスで動くため、グローバル変数では片側だけ設定を変えられない。
+    A/B 比較も、リーグ用の相手を作り分けることも、この入れ物を通して行う。
+
+      {"random_rate": 0.15, "attack_weight": 1.2, "setup_weight": 0.8}
+    """
+
+    __slots__ = ("eps", "context_signs", "attack_weight", "setup_weight",
+                 "resource_weight", "name")
+
+    def __init__(self, cfg: dict | None = None):
+        cfg = cfg or {}
+        self.name = cfg.get("strategy_profile", "standard")
+        self.eps = float(cfg.get("random_rate", EPS))
+        # 選択文脈による符号の切り替え。False で以前の「常に正」に戻す
+        self.context_signs = bool(cfg.get("context_signs", True))
+        self.attack_weight = float(cfg.get("attack_weight", 1.0))
+        self.setup_weight = float(cfg.get("setup_weight", 1.0))
+        self.resource_weight = float(cfg.get("resource_weight", 1.0))
+
+
+DEFAULT = Profile()
+
 # OptionType ごとの基礎点。攻撃と進化を上に、番の終了を最下位に置く。
 BASE = {
     13: 90,   # Attack
@@ -50,6 +76,7 @@ CARD_VALUE = {
     1227: 58,  # Lillie's Determination
     1259: 55,  # Spikemuth Gym
     112: 55,   # Munkidori
+    649: 68,   # Marnie's Morpeko        Punk Up の 5 枚をそのまま打点に変える
     1152: 50,  # Poké Pad
     1097: 45,  # Night Stretcher
     7: 42,     # Basic {D} Energy
@@ -61,6 +88,42 @@ CARD_VALUE = {
 }
 
 _DEFAULT_BY_TYPE = {0: 55, 1: 45, 2: 50, 3: 45, 4: 40, 5: 40}
+
+# SelectContext ごとの、カード価値をどちら向きに使うか。
+# 「山札から手札に加える」と「手札から捨てる」では、同じカードでも良し悪しが逆になる。
+# 向きの分からない文脈では価値表を使わない。誤った知識を当てるより、探索に委ねる。
+GAIN = frozenset({
+    1,   # SetupActivePokemon
+    2,   # SetupBenchPokemon
+    3,   # Switch      (自分の場を指す場合。相手を指す場合は playerIndex で分岐する)
+    4,   # ToActive
+    5,   # ToBench
+    6,   # ToField
+    7,   # ToHand
+    16,  # RemoveDamageCounter
+    17,  # Heal
+    22,  # AttachTo
+})
+LOSE = frozenset({
+    8,   # Discard
+    9,   # ToDeck
+    10,  # ToDeckBottom
+    11,  # ToPrize
+    26,  # DiscardEnergyCard
+    27,  # DiscardToolCard
+    29,  # DiscardCardOrAttachedCard
+    30,  # DiscardEnergy
+    32,  # ToDeckEnergy
+})
+
+
+def direction(context) -> int:
+    """1 なら価値の高いカードを選ぶ、-1 なら低いカードを選ぶ、0 なら価値表を使わない。"""
+    if context in GAIN:
+        return 1
+    if context in LOSE:
+        return -1
+    return 0
 
 
 def card_value(cid: int | None) -> float:
@@ -81,6 +144,31 @@ def card_value(cid: int | None) -> float:
             return 60.0
         return 50.0
     return float(_DEFAULT_BY_TYPE.get(c["cardType"], 35))
+
+
+def effective_damage(attack_id: int | None, a: dict, me: dict, you: dict) -> int:
+    """実際に出る打点。基礎値が状況で増える技は、ここで補正する。
+
+    カードデータの damage は基礎値なので、そのまま使うと Spiky Wheel (20) のような
+    技が最下位に沈む。打点が動く技だけ個別に計算する。
+    """
+    dmg = a.get("damage") or 0
+    if attack_id == 938:  # Spiky Wheel: 付いている {D} 1 個につき +40
+        act = _first(me.get("active"))
+        d = sum(1 for e in (act.get("energies") or []) if e == 7) if act else 0
+        return dmg + 40 * d
+    if attack_id == 120:  # Myriad Leaf Shower: 両者のバトル場のエネルギー 1 個につき +30
+        n = 0
+        for p in (me, you):
+            act = _first(p.get("active"))
+            n += len(act.get("energies") or []) if act else 0
+        return dmg + 30 * n
+    if attack_id == 339:  # Psychic (Alakazam): 相手のバトル場のエネルギー 1 個につき +50
+        act = _first(you.get("active"))
+        return dmg + 50 * (len(act.get("energies") or []) if act else 0)
+    if attack_id == 1072:  # Powerful Hand (Alakazam): 自分の手札 1 枚につきダメカン 2 個
+        return dmg + 20 * (me.get("handCount") or len(me.get("hand") or []))
+    return dmg
 
 
 def _first(seq):
@@ -117,28 +205,49 @@ def _card_of(opt: dict, sel: dict, me: dict) -> dict | None:
     return _in_play(me, area, index)
 
 
-def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict) -> float:
+def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
+          prof: "Profile" = DEFAULT) -> float:
     t = opt.get("type")
     s = float(BASE.get(t, 30))
 
     if t == 13:  # Attack
         a = ptcg.attack(opt.get("attackId"))
         if a:
-            dmg = a.get("damage") or 0
-            s += dmg / 8.0
+            dmg = effective_damage(opt.get("attackId"), a, me, you)
+            s += prof.attack_weight * dmg / 8.0
             tgt = _first(you.get("active"))
             if tgt and dmg and dmg >= (tgt.get("hp") or 0):
-                s += 80  # きぜつを取れる攻撃は他の何より優先する
+                s += 80 * prof.attack_weight  # きぜつを取れる攻撃は他の何より優先する
         return s
 
-    if t in (7, 9, 3, 6):  # Play / Evolve / Card / Energy
+    if t in (7, 9):  # Play / Evolve
+        # 手札から出す・進化させるのは常に自陣を強くする行動なので向きは正
         c = _card_of(opt, sel, me)
         cid = c.get("id") if c else None
-        s += card_value(cid) * (1.0 if t != 3 else 0.8)
+        s += prof.setup_weight * card_value(cid)
         if t == 9 and cid == 648:
             s += 40  # Punk Up でエネルギー 5 枚が付くので、進化そのものが加速になる
         if t == 7:
             s += _play_bonus(cid, me, you)
+        return s
+
+    if t in (3, 6):  # Card / Energy
+        # 選択肢は playerIndex で持ち主が分かる。相手のカードを指す選択 (ダメージの
+        # 対象、ボスの指令で引きずり出す先) は、自分のカードとは評価の向きが違う。
+        owner = opt.get("playerIndex")
+        foe = owner is not None and owner != cur.get("yourIndex", 0)
+        c = _card_of(opt, sel, you if foe else me)
+        cid = c.get("id") if c else None
+        if foe:
+            hp = (c or {}).get("hp")
+            s += 0.5 * card_value(cid)
+            if hp is not None:
+                # 落としやすいものを狙う。残り HP が低いほど取りやすい
+                s += max(0.0, 40.0 - hp / 8.0)
+            return s
+        d = direction(sel.get("context")) if prof.context_signs else 1
+        if d:
+            s += d * card_value(cid) * 0.8 * prof.resource_weight
         return s
 
     if t == 8:  # Attach
@@ -147,7 +256,11 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict) -> float:
             n = len(tgt.get("energies") or [])
             if opt.get("inPlayArea") == 4:
                 s += 12  # バトル場が先。ベンチに貯めても今のターンには効かない
-            if n < 2:
+            if tgt.get("id") == 649:
+                # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
+                # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
+                s += 8 * min(5, n + 1)
+            elif n < 2:
                 s += 10
             else:
                 s -= 6 * (n - 1)  # 3 枚目以降は腐る
@@ -183,13 +296,14 @@ def _play_bonus(cid: int | None, me: dict, you: dict) -> float:
     return 0.0
 
 
-def picks(obs: dict, rng, eps: float | None = None, jitter: float = 6.0) -> list[int]:
+def picks(obs: dict, rng, eps: float | None = None, jitter: float = 6.0,
+          prof: "Profile" = DEFAULT) -> list[int]:
     """この局面で打つ手。eps の確率で一様ランダムに落とす。
 
     根で使うときは eps=0.0, jitter=0.0 を渡して、雑音を入れずに順位だけで決める。
     """
     if eps is None:
-        eps = EPS
+        eps = prof.eps
     sel = obs.get("select") or {}
     options = sel.get("option") or []
     n = len(options)
@@ -213,7 +327,7 @@ def picks(obs: dict, rng, eps: float | None = None, jitter: float = 6.0) -> list
     # 同点の候補が並ぶ場面が多いので、乱数を足して順位を崩す
     ranked = sorted(
         range(n),
-        key=lambda i: -(score(options[i], sel, cur, me, you) + rng.random() * jitter),
+        key=lambda i: -(score(options[i], sel, cur, me, you, prof) + rng.random() * jitter),
     )
     return ranked[:k]
 
