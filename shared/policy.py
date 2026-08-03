@@ -206,6 +206,12 @@ def effective_damage(attack_id: int | None, a: dict, me: dict, you: dict) -> int
         return dmg + 50 * (len(act.get("energies") or []) if act else 0)
     if attack_id == 1072:  # Powerful Hand (Alakazam): 自分の手札 1 枚につきダメカン 2 個
         return dmg + 20 * (me.get("handCount") or len(me.get("hand") or []))
+    if attack_id == 183:  # Cruel Arrow (Fezandipiti ex): 相手 1 体に 100 (ベンチ可)
+        return 100
+    if attack_id == 980:  # Cosmic Beam (Solrock): ベンチに Lunatone がいなければ不発
+        if not any((p or {}).get("id") == 675 for p in (me.get("bench") or [])):
+            return 0
+        return dmg
     return dmg
 
 
