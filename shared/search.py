@@ -24,11 +24,15 @@ import random
 
 import policy
 
-# ロールアウトの打ち方。既定はルールベース方策 + 終局まで。
+# ロールアウトの打ち方。
 #   PTCG_POLICY=0  完全ランダムに戻す (A/B 比較用)
 #   PTCG_DEPTH=n   n 手で打ち切り、policy.evaluate で採点する (0 で打ち切らない)
+#
+# 既定はルールベース方策 + 60 手で打ち切り。同一デッキ・同一時間予算の 60 戦で、
+# 方策は完全ランダムに 75.0%、打ち切りは終局まで回す版に 73.3% で勝つ。
+# ロールアウトは平均 149 手あるので、打ち切ると標本数がおよそ 2〜3 倍になる。
 USE_POLICY = os.environ.get("PTCG_POLICY", "1") not in ("0", "", "off")
-DEPTH = int(os.environ.get("PTCG_DEPTH", "0"))
+DEPTH = int(os.environ.get("PTCG_DEPTH", "60"))
 
 _bound = False
 

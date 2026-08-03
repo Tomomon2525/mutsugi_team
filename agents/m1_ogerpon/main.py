@@ -17,6 +17,7 @@
 """
 
 import json
+import math
 import os
 import random
 import sys
@@ -60,6 +61,11 @@ def _config() -> dict:
 CONFIG = _config()
 USE_POLICY = CONFIG.get("policy")
 DEPTH = CONFIG.get("depth")
+
+# 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
+# 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。
+USE_UCB = bool(CONFIG.get("ucb", os.environ.get("PTCG_UCB", "1") not in ("0", "", "off")))
+UCB_C = float(CONFIG.get("ucb_c", os.environ.get("PTCG_UCB_C", "0.7")))
 
 # 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
 # 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
@@ -113,6 +119,28 @@ def slice_seconds(obs: dict) -> float:
     return max(MIN_SLICE, min(MAX_SLICE, (float(rem) - RESERVE) / HORIZON))
 
 
+def pick_arm(score: list[float], played: list[int], tried: list[int], total: int) -> int | None:
+    """次にロールアウトする候補。全部が展開に失敗していれば None。"""
+    n = len(tried)
+    for i in range(n):
+        if not tried[i]:
+            return i  # 未試行を残したまま比較しない
+    if not USE_UCB:
+        return min(range(n), key=lambda i: tried[i])
+
+    logt = math.log(max(2.0, float(sum(tried))))
+    best, best_v = None, float("-inf")
+    for i in range(n):
+        # 何度試しても展開できない候補は見切る (実測では発生していない)
+        if played[i] == 0 and tried[i] >= 4:
+            continue
+        mean = (score[i] / played[i] + 1.0) / 2.0 if played[i] else 0.5
+        v = mean + UCB_C * math.sqrt(logt / tried[i])
+        if v > best_v:
+            best, best_v = i, v
+    return best
+
+
 def choose(obs: dict) -> list[int]:
     sel = obs["select"]
     options = sel["option"]
@@ -135,6 +163,7 @@ def choose(obs: dict) -> list[int]:
     my_index = obs["current"]["yourIndex"]
     score = [0.0] * n
     played = [0] * n
+    tried = [0] * n
     total = 0
 
     s = searcher()
@@ -149,25 +178,24 @@ def choose(obs: dict) -> list[int]:
                 break
             try:
                 while total < MAX_ROLLOUTS:
-                    ran = 0
-                    for i in range(n):
-                        # 全選択肢を 1 度は試す。未試行を残すと比較にならない。
-                        if time.monotonic() >= deadline and played[i]:
-                            continue
-                        child = s.step(root.search_id, [i])
-                        if child is None:
-                            _stat["step_none"] += 1
-                            continue
-                        # playout は通過したノードを child ごと解放する
-                        r = s.playout(child, my_index, use_policy=USE_POLICY, depth=DEPTH)
-                        total += 1
-                        ran += 1
-                        if r is None:
-                            _stat["playout_none"] += 1
-                            continue
+                    i = pick_arm(score, played, tried, total)
+                    if i is None:
+                        break
+                    tried[i] += 1
+                    child = s.step(root.search_id, [i])
+                    if child is None:
+                        _stat["step_none"] += 1
+                        continue
+                    # playout は通過したノードを child ごと解放する
+                    r = s.playout(child, my_index, use_policy=USE_POLICY, depth=DEPTH)
+                    total += 1
+                    if r is not None:
                         score[i] += r
                         played[i] += 1
-                    if ran == 0 or time.monotonic() >= deadline:
+                    else:
+                        _stat["playout_none"] += 1
+                    # tried で判定する。展開に失敗し続ける候補があっても抜けられる。
+                    if time.monotonic() >= deadline and all(tried):
                         break
             finally:
                 s.release(root.search_id)
@@ -179,9 +207,11 @@ def choose(obs: dict) -> list[int]:
     if not any(played):
         return [0]
 
-    # 未評価の選択肢を最下位に落とすため、試行 0 は -inf 扱いにする
+    # UCB は良さそうな候補に試行を寄せるので、平均値で選ぶと「2 回試して両方勝った」
+    # 候補が最上位に来る。試行回数を第一基準にし、平均は同数のときの決め手にする。
+    # 均等配分 (UCB なし) の場合は試行回数が並ぶので、実質は平均で決まる。
     rates = [score[i] / played[i] if played[i] else float("-inf") for i in range(n)]
-    return [max(range(n), key=lambda i: rates[i])]
+    return [max(range(n), key=lambda i: (played[i], rates[i]))]
 
 
 def legal_fallback(obs: dict) -> list[int]:
