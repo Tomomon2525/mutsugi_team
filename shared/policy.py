@@ -87,6 +87,42 @@ CARD_VALUE = {
     860: 28,   # Snorunt
     1122: 28,  # Pokégear 3.0
     1137: 12,  # Tool Scrapper
+    # --- 環境デッキ側の主要カード。相手をルールベース以上の強さで動かすために置く。
+    #     ここが既定値のままだと相手が勝ち筋を実行できず、学習相手にならない。
+    678: 100,  # Mega Lucario ex     HP340、Mega Brave 270
+    121: 100,  # Dragapult ex        HP320、Phantom Dive 200 + ベンチ 60
+    743: 95,   # Alakazam            手札枚数 × 20 打点
+    742: 62,   # Kadabra
+    741: 68,   # Abra
+    120: 62,   # Drakloak
+    119: 68,   # Dreepy
+    677: 68,   # Riolu               Mega Lucario ex の進化元
+    674: 55,   # Hariyama
+    673: 45,   # Makuhita
+    676: 45,   # Solrock
+    675: 45,   # Lunatone
+    140: 60,   # Fezandipiti ex
+    1071: 55,  # Meowth ex
+    66: 50,    # Dudunsparce
+    305: 45,   # Dunsparce
+    235: 40,   # Budew
+    343: 35,   # Shaymin
+    1121: 60,  # Ultra Ball
+    1225: 58,  # Hilda
+    1213: 55,  # Judge
+    1198: 55,  # Crispin
+    1141: 55,  # Premium Power Pro
+    1142: 50,  # Fighting Gong
+    1229: 50,  # Wally's Compassion
+    1197: 48,  # Xerosic's Machinations
+    1184: 45,  # Lana's Aid
+    1120: 40,  # Crushing Hammer
+    1081: 38,  # Enhanced Hammer
+    1266: 40,  # Nighttime Mine
+    1246: 38,  # Jamming Tower
+    1129: 30,  # Sacred Ash
+    1123: 25,  # Switch
+    1159: 25,  # Hero's Cape
 }
 
 _DEFAULT_BY_TYPE = {0: 55, 1: 45, 2: 50, 3: 45, 4: 40, 5: 40}
@@ -278,6 +314,49 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
     return s
 
 
+def attack_options(obs: dict) -> tuple[set, set]:
+    """(攻撃できる選択肢, そのうち相手をきぜつさせられるもの) の index 集合。
+
+    「攻撃できるのにしなかった」「きぜつを取れるのに逃した」を数えるために使う。
+    勝率だけでは、どこが弱いのかが分からない (docs/design.md 9 節)。
+    """
+    sel = obs.get("select") or {}
+    cur = obs.get("current") or {}
+    players = cur.get("players") or []
+    if len(players) < 2:
+        return set(), set()
+    mi = cur.get("yourIndex", 0)
+    me, you = players[mi], players[1 - mi]
+    tgt = _first(you.get("active"))
+    hp = (tgt or {}).get("hp") or 0
+    atk: set = set()
+    ko: set = set()
+    for i, o in enumerate(sel.get("option") or []):
+        if o.get("type") != 13:
+            continue
+        atk.add(i)
+        aid = o.get("attackId")
+        a = ptcg.attack(aid)
+        if a and hp and effective_damage(aid, a, me, you) >= hp:
+            ko.add(i)
+    return atk, ko
+
+
+def in_play_ids(obs: dict) -> list[int]:
+    """自分の場 (バトル場 + ベンチ) にいるポケモンの ID。"""
+    cur = obs.get("current") or {}
+    players = cur.get("players") or []
+    if not players:
+        return []
+    me = players[cur.get("yourIndex", 0)]
+    out = []
+    for zone in ("active", "bench"):
+        for p in me.get(zone) or []:
+            if p:
+                out.append(p.get("id"))
+    return out
+
+
 def _play_bonus(cid: int | None, me: dict, you: dict) -> float:
     """局面によって価値が大きく動くカードだけ補正する。"""
     bench = [p for p in (me.get("bench") or []) if p]
@@ -286,7 +365,12 @@ def _play_bonus(cid: int | None, me: dict, you: dict) -> float:
     if cid == 1086:  # Buddy-Buddy Poffin
         return 35.0 if len(bench) < 3 else -45.0
     if cid == 1079:  # Rare Candy
-        return 35.0 if 648 in hand_ids else -60.0
+        # 手札に 2 進化がいるかで判断する。デッキ固有の ID で判定すると、
+        # 同じアメを使う相手デッキ (フーディン等) が常に減点になり、
+        # 学習相手として成立しなくなる。
+        if any((ptcg.card(h) or {}).get("stage2") for h in hand_ids):
+            return 35.0
+        return -60.0
     if cid == 1227:  # Lillie's Determination
         if len(hand_ids) <= 3:
             return 30.0

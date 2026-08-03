@@ -140,6 +140,7 @@ MAX_ROLLOUTS = int(os.environ.get("PTCG_MAX_ROLLOUTS", "4096"))
 # ジョブごとに別プロセスで動くため、追記の混線を避けて PID で分ける。
 TRACE = os.environ.get("PTCG_TRACE")
 _stat: dict = {}
+_game = 0
 
 
 def trace(rec: dict) -> None:
@@ -276,9 +277,11 @@ def legal_fallback(obs: dict) -> list[int]:
 
 
 def agent(obs: dict) -> list[int]:
-    global _pool
+    global _pool, _game
     if obs.get("select") is None:
         _pool = TIME_POOL
+        # プロセスは複数試合で使い回されるので、試合ごとに番号を振る
+        _game += 1
         return list(DECK)
     t0 = time.monotonic()
     _stat.clear()
@@ -302,10 +305,23 @@ def agent(obs: dict) -> list[int]:
         _pool -= dt
         if TRACE:
             sel = obs.get("select") or {}
+            cur = obs.get("current") or {}
             rec = dict(_stat)
-            rec.update(t=round(dt, 4), slice=round(slice_seconds(obs), 3),
+            rec.update(g=_game, turn=cur.get("turn"), side=cur.get("yourIndex"),
+                       t=round(dt, 4), slice=round(slice_seconds(obs), 3),
                        pool=round(_pool, 1), picked=picked,
                        sel_type=sel.get("type"), sel_ctx=sel.get("context"))
+            try:
+                # 「攻撃できるのにしなかった」「きぜつを逃した」を後から数えるため、
+                # 機会の有無と、実際に取ったかどうかを両方残す
+                atk, ko = policy.attack_options(obs)
+                got = set(picked or [])
+                rec.update(atk_avail=len(atk), ko_avail=len(ko),
+                           atk_taken=int(bool(got & atk)),
+                           ko_taken=int(bool(got & ko)),
+                           in_play=policy.in_play_ids(obs))
+            except Exception:
+                pass
             if err:
                 rec["error"] = err[-400:]
             trace(rec)
