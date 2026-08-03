@@ -111,7 +111,7 @@ def _config() -> dict:
 CONFIG = _config()
 USE_POLICY = CONFIG.get("policy")
 DEPTH = CONFIG.get("depth")
-PROFILE = policy.Profile(CONFIG)
+PROFILE = policy.Profile(CONFIG, DECK)
 
 # 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
 # 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。

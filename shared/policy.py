@@ -32,10 +32,13 @@ class Profile:
     """
 
     __slots__ = ("eps", "context_signs", "foe_target", "attack_weight",
-                 "setup_weight", "resource_weight", "name")
+                 "setup_weight", "resource_weight", "name", "traits")
 
-    def __init__(self, cfg: dict | None = None):
+    def __init__(self, cfg: dict | None = None, deck: list[int] | None = None):
         cfg = cfg or {}
+        # デッキ固有の性質。設定ファイルではなくデッキの中身から導く。
+        # 指定漏れや取り違えが起きないようにするため。
+        self.traits = deck_traits(deck) if cfg.get("deck_traits", True) else {}
         self.name = cfg.get("strategy_profile", "standard")
         self.eps = float(cfg.get("random_rate", EPS))
         # 選択文脈による符号の切り替え。False で以前の「常に正」に戻す
@@ -45,6 +48,26 @@ class Profile:
         self.attack_weight = float(cfg.get("attack_weight", 1.0))
         self.setup_weight = float(cfg.get("setup_weight", 1.0))
         self.resource_weight = float(cfg.get("resource_weight", 1.0))
+
+
+def deck_traits(deck: list[int] | None) -> dict:
+    """デッキの中身から、汎用ルールと向きが逆になる性質を拾う。
+
+    どのデッキにも通用する一般則だけで動かすと、勝ち筋と正面から矛盾する相手が出る。
+    根拠は docs/meta_decks.md にある。
+
+      hand_hoard        手札の枚数がそのまま打点になる技を持つ。手札を吐き出すと弱くなる
+      discard_energy    トラッシュのエネルギーを回収して使う。捨てることが利益になる
+    """
+    if not deck:
+        return {}
+    ids = set(deck)
+    out = {}
+    if 743 in ids:  # Alakazam の Powerful Hand は手札 1 枚につきダメカン 2 個
+        out["hand_hoard"] = True
+    if 678 in ids:  # Mega Lucario ex の Aura Jab はトラッシュから闘エネを 3 枚回収する
+        out["discard_energy"] = True
+    return out
 
 
 DEFAULT = Profile()
@@ -273,6 +296,12 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
             s += 40  # Punk Up でエネルギー 5 枚が付くので、進化そのものが加速になる
         if t == 7:
             s += _play_bonus(cid, me, you)
+            if prof.traits.get("hand_hoard"):
+                # 手札枚数が打点になるデッキでは、殴れる状態が整っているのに
+                # カードを使うと自分で打点を削ることになる。準備中は減点しない。
+                act = _first(me.get("active"))
+                if act and (act.get("energies") or []) and act.get("id") == 743:
+                    s -= 25
         return s
 
     if t in (3, 6):  # Card / Energy
@@ -291,6 +320,11 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 s += max(0.0, 40.0 - hp / 8.0)
             return s
         d = direction(sel.get("context")) if prof.context_signs else 1
+        if d < 0 and prof.traits.get("discard_energy"):
+            c2 = ptcg.card(cid)
+            if c2 and c2.get("cardType") == 4:  # BasicEnergy
+                # Aura Jab がトラッシュから回収するので、落とすこと自体が仕込みになる
+                d = 1
         if d:
             s += d * card_value(cid) * 0.8 * prof.resource_weight
         return s
