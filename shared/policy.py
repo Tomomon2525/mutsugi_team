@@ -31,8 +31,8 @@ class Profile:
       {"random_rate": 0.15, "attack_weight": 1.2, "setup_weight": 0.8}
     """
 
-    __slots__ = ("eps", "context_signs", "attack_weight", "setup_weight",
-                 "resource_weight", "name")
+    __slots__ = ("eps", "context_signs", "foe_target", "attack_weight",
+                 "setup_weight", "resource_weight", "name")
 
     def __init__(self, cfg: dict | None = None):
         cfg = cfg or {}
@@ -40,6 +40,8 @@ class Profile:
         self.eps = float(cfg.get("random_rate", EPS))
         # 選択文脈による符号の切り替え。False で以前の「常に正」に戻す
         self.context_signs = bool(cfg.get("context_signs", True))
+        # 相手のカードを指す選択の専用ルール。False で以前の挙動に戻す
+        self.foe_target = bool(cfg.get("foe_target", True))
         self.attack_weight = float(cfg.get("attack_weight", 1.0))
         self.setup_weight = float(cfg.get("setup_weight", 1.0))
         self.resource_weight = float(cfg.get("resource_weight", 1.0))
@@ -235,7 +237,8 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         # 選択肢は playerIndex で持ち主が分かる。相手のカードを指す選択 (ダメージの
         # 対象、ボスの指令で引きずり出す先) は、自分のカードとは評価の向きが違う。
         owner = opt.get("playerIndex")
-        foe = owner is not None and owner != cur.get("yourIndex", 0)
+        foe = (prof.foe_target and owner is not None
+               and owner != cur.get("yourIndex", 0))
         c = _card_of(opt, sel, you if foe else me)
         cid = c.get("id") if c else None
         if foe:
