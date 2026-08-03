@@ -19,7 +19,16 @@ SearchEnd / SearchRelease を公開しているが、cg/sim.py が宣言して�
 import collections
 import ctypes
 import json
+import os
 import random
+
+import policy
+
+# ロールアウトの打ち方。既定はルールベース方策 + 終局まで。
+#   PTCG_POLICY=0  完全ランダムに戻す (A/B 比較用)
+#   PTCG_DEPTH=n   n 手で打ち切り、policy.evaluate で採点する (0 で打ち切らない)
+USE_POLICY = os.environ.get("PTCG_POLICY", "1") not in ("0", "", "off")
+DEPTH = int(os.environ.get("PTCG_DEPTH", "0"))
 
 _bound = False
 
@@ -218,8 +227,18 @@ class Searcher:
 
     # ------------------------------------------------------------ ロールアウト
 
-    def playout(self, node: Node, my_index: int, max_steps: int = 2000) -> int | None:
-        """終局まで適当に打つ。1 勝ち / 0 引き分け / -1 負け。決着しなければ None。
+    def playout(
+        self,
+        node: Node,
+        my_index: int,
+        max_steps: int = 2000,
+        use_policy: bool | None = None,
+        depth: int | None = None,
+    ) -> float | None:
+        """終局まで打つ。1 勝ち / 0 引き分け / -1 負け。決着しなければ None。
+
+        PTCG_DEPTH を指定した場合は途中で打ち切り、policy.evaluate の値を返す。
+        評価値は ±0.7 に収まるので、終局の ±1 を上回ることはない。
 
         通過したノードは即座に解放する。渡された node も解放するので、呼び出し側は
         これ以降 node を触らないこと。
@@ -228,6 +247,10 @@ class Searcher:
         SearchEnd までは再利用されない。1 回のロールアウトが 90 手前後あるため、
         ここで解放しないと 1 手の思考で数百 MB を消費する。
         """
+        # 対戦の両側が同じプロセスで動くので、環境変数では片側だけ設定を変えられない。
+        # A/B 比較のため、呼び出し側 (エージェントごとの config.json) から上書きできる。
+        use_policy = USE_POLICY if use_policy is None else use_policy
+        depth = DEPTH if depth is None else depth
         steps = 0
         try:
             while steps < max_steps:
@@ -238,14 +261,21 @@ class Searcher:
                     if r == 1 - my_index:
                         return -1
                     return 0
+                if depth and steps >= depth:
+                    return policy.evaluate(node.obs, my_index)
                 sel = node.select
                 if not sel or not sel.get("option"):
                     return None
-                n = len(sel["option"])
-                hi = min(int(sel.get("maxCount") or 0), n) or 1
-                lo = min(int(sel.get("minCount") or 0), hi)
-                k = hi if hi > 0 else lo
-                nxt = self.step(node.search_id, random.sample(range(n), k))
+                if use_policy:
+                    picks = policy.picks(node.obs, random)
+                else:
+                    n = len(sel["option"])
+                    hi = min(int(sel.get("maxCount") or 0), n) or 1
+                    lo = min(int(sel.get("minCount") or 0), hi)
+                    picks = random.sample(range(n), hi if hi > 0 else lo)
+                if not picks:
+                    return None
+                nxt = self.step(node.search_id, picks)
                 if nxt is None:
                     return None
                 self.release(node.search_id)

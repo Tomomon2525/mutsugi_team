@@ -16,10 +16,12 @@
   PTCG_TIME_POOL   remainingOverageTime が無い環境 (ローカル評価) での持ち時間
 """
 
+import json
 import os
 import random
 import sys
 import time
+import traceback
 
 
 def _here() -> str:
@@ -34,10 +36,30 @@ def _here() -> str:
 
 sys.path.insert(0, _here())
 
+import policy  # noqa: E402
 import ptcg  # noqa: E402
 import search  # noqa: E402
 
 DECK = ptcg.load_deck(os.path.join(_here(), "deck.csv"))
+
+
+def _config() -> dict:
+    """エージェントごとの設定。対戦の両側が同じプロセスで動くため、環境変数では
+    片側だけ変えられない。A/B 比較はこのファイルの有無で切り替える。
+
+      {"policy": false}   ロールアウトを完全ランダムに戻す
+      {"depth": 40}       40 手で打ち切って盤面評価に切り替える
+    """
+    try:
+        with open(os.path.join(_here(), "config.json")) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+CONFIG = _config()
+USE_POLICY = CONFIG.get("policy")
+DEPTH = CONFIG.get("depth")
 
 # 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
 # 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
@@ -54,6 +76,23 @@ FORCE_POOL = "PTCG_TIME_POOL" in os.environ
 
 DETERMINIZATIONS = int(os.environ.get("PTCG_DETERMINIZATION", "2"))
 MAX_ROLLOUTS = int(os.environ.get("PTCG_MAX_ROLLOUTS", "4096"))
+
+# kaggle_environments はエージェントの標準出力も例外も握り潰す。探索が何回
+# 失敗しているか、フォールバックに落ちているかを知る手段が他にないので、
+# PTCG_TRACE を指定したときだけ 1 手 1 行の JSON を書く。エージェントは
+# ジョブごとに別プロセスで動くため、追記の混線を避けて PID で分ける。
+TRACE = os.environ.get("PTCG_TRACE")
+_stat: dict = {}
+
+
+def trace(rec: dict) -> None:
+    if not TRACE:
+        return
+    try:
+        with open(f"{TRACE}.{os.getpid()}", "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 _searcher: search.Searcher | None = None
 # remainingOverageTime が来ない環境では自前で持ち時間を減らして模倣する
@@ -81,10 +120,17 @@ def choose(obs: dict) -> list[int]:
     hi = min(int(sel.get("maxCount") or 0), n)
     lo = min(int(sel.get("minCount") or 0), hi)
 
-    # 選択の余地がない場面では探索しない。試合の 2 割はここに該当する。
-    if n <= 1 or hi != 1:
-        return list(range(hi if hi > 0 else lo))
+    _stat.update(n=n, lo=lo, hi=hi, searched=0, begin_none=0, step_none=0,
+                 playout_none=0, rollouts=0, evaluated=0)
 
+    # 選択の余地がない場面では探索しない。試合の 2 割はここに該当する。
+    # 複数枚を選ぶ場面 (全体の 2.8%) は先頭から取らず、方策の順位で選ぶ。
+    if n <= 1 or hi != 1:
+        if USE_POLICY is False:
+            return list(range(hi if hi > 0 else lo))
+        return policy.picks(obs, random, eps=0.0, jitter=0.0)
+
+    _stat["searched"] = 1
     deadline = time.monotonic() + slice_seconds(obs)
     my_index = obs["current"]["yourIndex"]
     score = [0.0] * n
@@ -99,6 +145,7 @@ def choose(obs: dict) -> list[int]:
                 break
             root = s.begin(obs, DECK)
             if root is None:
+                _stat["begin_none"] += 1
                 break
             try:
                 while total < MAX_ROLLOUTS:
@@ -109,12 +156,14 @@ def choose(obs: dict) -> list[int]:
                             continue
                         child = s.step(root.search_id, [i])
                         if child is None:
+                            _stat["step_none"] += 1
                             continue
                         # playout は通過したノードを child ごと解放する
-                        r = s.playout(child, my_index)
+                        r = s.playout(child, my_index, use_policy=USE_POLICY, depth=DEPTH)
                         total += 1
                         ran += 1
                         if r is None:
+                            _stat["playout_none"] += 1
                             continue
                         score[i] += r
                         played[i] += 1
@@ -125,6 +174,8 @@ def choose(obs: dict) -> list[int]:
     finally:
         s.end()
 
+    _stat["rollouts"] = total
+    _stat["evaluated"] = sum(1 for p in played if p)
     if not any(played):
         return [0]
 
@@ -148,6 +199,9 @@ def agent(obs: dict) -> list[int]:
         _pool = TIME_POOL
         return list(DECK)
     t0 = time.monotonic()
+    _stat.clear()
+    err = None
+    picked: list[int] | None = None
     try:
         picked = choose(obs)
         sel = obs["select"]
@@ -158,6 +212,18 @@ def agent(obs: dict) -> list[int]:
             raise ValueError("selection count out of range")
         return picked
     except Exception:
-        return legal_fallback(obs)
+        err = traceback.format_exc(limit=3)
+        picked = legal_fallback(obs)
+        return picked
     finally:
-        _pool -= time.monotonic() - t0
+        dt = time.monotonic() - t0
+        _pool -= dt
+        if TRACE:
+            sel = obs.get("select") or {}
+            rec = dict(_stat)
+            rec.update(t=round(dt, 4), slice=round(slice_seconds(obs), 3),
+                       pool=round(_pool, 1), picked=picked,
+                       sel_type=sel.get("type"), sel_ctx=sel.get("context"))
+            if err:
+                rec["error"] = err[-400:]
+            trace(rec)
