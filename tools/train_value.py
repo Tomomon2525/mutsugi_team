@@ -85,6 +85,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("data", nargs="+")
     ap.add_argument("--l2", type=float, default=1.0)
+    ap.add_argument("--tol", type=float, default=0.002,
+                    help="この対数損失の悪化までは、強い罰則のほうを選ぶ")
     ap.add_argument("--agent", default=None,
                     help="この config.json に value_weights を書き込む")
     ap.add_argument("--min-turn", type=int, default=0,
@@ -103,18 +105,23 @@ def main() -> None:
     Xt, yt = X[~val], y[~val]
     Xv, yv = X[val], y[val]
 
-    # 罰則の強さを検証データで選ぶ。特徴が少ないので粗い格子で足りる
-    best = None
-    for l2 in (0.1, 1.0, 10.0, 100.0, 1000.0):
+    # 罰則の強さを検証データで選ぶ。ただし損失が最小のものは採らない。
+    #
+    # 特徴どうしの相関が強く (サイドの残り枚数とトラッシュの枚数で 0.80)、
+    # 弱い罰則では係数が相方に食われて符号が反転する。実測では、サイドを
+    # 取っているほど不利という重みが付いた。予測値としては問題なくても、
+    # 探索の指針としては危ない。損失がほぼ並ぶ範囲では強い側を選ぶ。
+    curve = []
+    for l2 in (0.1, 1.0, 10.0, 100.0, 1000.0, 3000.0, 10000.0):
         w = fit(Xt, yt, l2)
         z = np.clip(Xv @ w, -30, 30)
         p = 1.0 / (1.0 + np.exp(-z))
         ll = -np.mean(yv * np.log(p + 1e-12) + (1 - yv) * np.log(1 - p + 1e-12))
-        print(f"  l2={l2:<7} 検証 対数損失 {ll:.4f}")
-        if best is None or ll < best[0]:
-            best = (ll, l2)
-    l2 = best[1]
-    print(f"\n選んだ罰則 l2={l2}")
+        print(f"  l2={l2:<8} 検証 対数損失 {ll:.4f}")
+        curve.append((l2, ll))
+    floor = min(ll for _, ll in curve)
+    l2 = max(v for v, ll in curve if ll <= floor + args.tol)
+    print(f"\n選んだ罰則 l2={l2}  (最小損失 {floor:.4f} + {args.tol} 以内で最も強いもの)")
 
     w = fit(Xt, yt, l2)
     print("\n[分割して評価]")
