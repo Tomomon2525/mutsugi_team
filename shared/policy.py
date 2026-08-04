@@ -16,7 +16,9 @@
 """
 
 import os
+from math import exp as _exp
 
+import features
 import ptcg
 
 EPS = float(os.environ.get("PTCG_EPS", "0.25"))
@@ -32,7 +34,7 @@ class Profile:
     """
 
     __slots__ = ("eps", "context_signs", "foe_target", "attack_weight",
-                 "setup_weight", "resource_weight", "name", "traits")
+                 "setup_weight", "resource_weight", "name", "traits", "value_w")
 
     def __init__(self, cfg: dict | None = None, deck: list[int] | None = None):
         cfg = cfg or {}
@@ -48,6 +50,10 @@ class Profile:
         self.attack_weight = float(cfg.get("attack_weight", 1.0))
         self.setup_weight = float(cfg.get("setup_weight", 1.0))
         self.resource_weight = float(cfg.get("resource_weight", 1.0))
+        # 学習した評価関数の重み。config.json に直接書く。別ファイルにすると
+        # 提出物への同梱漏れが起きるため、設定の中に持たせる。
+        w = cfg.get("value_weights")
+        self.value_w = [float(x) for x in w] if w and len(w) == features.N else None
 
 
 def deck_traits(deck: list[int] | None) -> dict:
@@ -459,8 +465,22 @@ def picks(obs: dict, rng, eps: float | None = None, jitter: float = 6.0,
     return ranked[:k]
 
 
-def evaluate(obs: dict, my_index: int) -> float:
-    """未決着の局面を -0.7〜0.7 で採点する。終局の ±1 より必ず内側に収める。"""
+def evaluate(obs: dict, my_index: int, prof: "Profile" = DEFAULT) -> float:
+    """未決着の局面を -0.7〜0.7 で採点する。終局の ±1 より必ず内側に収める。
+
+    重みを与えられていれば学習したモデルを使う。無ければ手書きの式に落ちる。
+    """
+    if prof is not None and prof.value_w is not None:
+        x = features.vector(obs, my_index)
+        w = prof.value_w
+        z = 0.0
+        for i in range(features.N):
+            z += w[i] * x[i]
+        # ロジスティック回帰の出力 p を [-1, 1] に写す。z が大きく振れても
+        # 飽和するので、上下の切り詰めは形式的な保険にすぎない。
+        p = 1.0 / (1.0 + _exp(-max(-30.0, min(30.0, z))))
+        return max(-0.7, min(0.7, 1.4 * p - 0.7))
+
     cur = obs.get("current") or {}
     players = cur.get("players") or []
     if len(players) < 2:

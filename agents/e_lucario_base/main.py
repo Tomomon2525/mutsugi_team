@@ -113,6 +113,11 @@ USE_POLICY = CONFIG.get("policy")
 DEPTH = CONFIG.get("depth")
 PROFILE = policy.Profile(CONFIG, DECK)
 
+# 探索を止めてルール方策だけで打つ。学習データを大量に集めるための収集用で、
+# 提出物では使わない。探索がある限り 1 手に秒単位かかり、量が集まらない。
+USE_SEARCH = bool(CONFIG.get("search", os.environ.get("PTCG_SEARCH", "1")
+                             not in ("0", "", "off")))
+
 # 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
 # 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。
 USE_UCB = bool(CONFIG.get("ucb", os.environ.get("PTCG_UCB", "1") not in ("0", "", "off")))
@@ -238,7 +243,7 @@ def choose(obs: dict) -> list[int]:
 
     # 選択の余地がない場面では探索しない。試合の 2 割はここに該当する。
     # 複数枚を選ぶ場面 (全体の 2.8%) は先頭から取らず、方策の順位で選ぶ。
-    if n <= 1 or hi != 1:
+    if n <= 1 or hi != 1 or not USE_SEARCH:
         if USE_POLICY is False:
             return list(range(hi if hi > 0 else lo))
         return policy.picks(obs, random, eps=0.0, jitter=0.0, prof=PROFILE)

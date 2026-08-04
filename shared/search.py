@@ -268,7 +268,7 @@ class Searcher:
                         return -1
                     return 0
                 if depth and steps >= depth:
-                    return policy.evaluate(node.obs, my_index)
+                    return policy.evaluate(node.obs, my_index, profile)
                 sel = node.select
                 if not sel or not sel.get("option"):
                     return None

@@ -111,12 +111,22 @@ def _config() -> dict:
 CONFIG = _config()
 USE_POLICY = CONFIG.get("policy")
 DEPTH = CONFIG.get("depth")
-PROFILE = policy.Profile(CONFIG)
+PROFILE = policy.Profile(CONFIG, DECK)
+
+# 探索を止めてルール方策だけで打つ。学習データを大量に集めるための収集用で、
+# 提出物では使わない。探索がある限り 1 手に秒単位かかり、量が集まらない。
+USE_SEARCH = bool(CONFIG.get("search", os.environ.get("PTCG_SEARCH", "1")
+                             not in ("0", "", "off")))
 
 # 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
 # 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。
 USE_UCB = bool(CONFIG.get("ucb", os.environ.get("PTCG_UCB", "1") not in ("0", "", "off")))
 UCB_C = float(CONFIG.get("ucb_c", os.environ.get("PTCG_UCB_C", "0.7")))
+
+# ルール評価を「何回ぶんのロールアウトとみなすか」。0 で無効。
+# 1 手あたり 1 候補 8 回程度しか試行できない場面があり、そこでは勝率平均が
+# ほぼ雑音になる。ルールを弱い事前値として入れて、試行が増えたら薄める。
+PRIOR = float(CONFIG.get("prior", os.environ.get("PTCG_PRIOR", "1.5")))
 
 # 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
 # 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
@@ -171,7 +181,35 @@ def slice_seconds(obs: dict) -> float:
     return max(MIN_SLICE, min(MAX_SLICE, (float(rem) - RESERVE) / HORIZON))
 
 
-def pick_arm(score: list[float], played: list[int], tried: list[int], total: int) -> int | None:
+def rule_prior(obs: dict) -> list[float]:
+    """各候補のルール評価を [-1, 1] に正規化する。
+
+    生のスコアは 2 (番の終了) から 200 超 (きぜつを取れる攻撃) まで開きがあり、
+    ロールアウトの報酬 [-1, 1] とは桁が違う。そのまま混ぜると λ=1 でもルールが
+    探索を完全に上書きしてしまう。順位が保たれればよいので、この局面の中で
+    最小を -1、最大を +1 に写す。
+    """
+    sel = obs["select"]
+    cur = obs["current"]
+    players = cur["players"]
+    mi = cur["yourIndex"]
+    me, you = players[mi], players[1 - mi]
+    raw = [policy.score(o, sel, cur, me, you, PROFILE) for o in sel["option"]]
+    lo, hi = min(raw), max(raw)
+    if hi - lo < 1e-9:
+        return [0.0] * len(raw)
+    return [2.0 * (v - lo) / (hi - lo) - 1.0 for v in raw]
+
+
+def q_hat(i: int, score: list[float], played: list[int], prior: list[float]) -> float:
+    """事前値込みの平均。試行が増えるほどルールの影響が薄まる。"""
+    if PRIOR <= 0:
+        return score[i] / played[i] if played[i] else 0.0
+    return (score[i] + PRIOR * prior[i]) / (played[i] + PRIOR)
+
+
+def pick_arm(score: list[float], played: list[int], tried: list[int], total: int,
+             prior: list[float]) -> int | None:
     """次にロールアウトする候補。全部が展開に失敗していれば None。"""
     n = len(tried)
     for i in range(n):
@@ -186,7 +224,7 @@ def pick_arm(score: list[float], played: list[int], tried: list[int], total: int
         # 何度試しても展開できない候補は見切る (実測では発生していない)
         if played[i] == 0 and tried[i] >= 4:
             continue
-        mean = (score[i] / played[i] + 1.0) / 2.0 if played[i] else 0.5
+        mean = (q_hat(i, score, played, prior) + 1.0) / 2.0
         v = mean + UCB_C * math.sqrt(logt / tried[i])
         if v > best_v:
             best, best_v = i, v
@@ -205,7 +243,7 @@ def choose(obs: dict) -> list[int]:
 
     # 選択の余地がない場面では探索しない。試合の 2 割はここに該当する。
     # 複数枚を選ぶ場面 (全体の 2.8%) は先頭から取らず、方策の順位で選ぶ。
-    if n <= 1 or hi != 1:
+    if n <= 1 or hi != 1 or not USE_SEARCH:
         if USE_POLICY is False:
             return list(range(hi if hi > 0 else lo))
         return policy.picks(obs, random, eps=0.0, jitter=0.0, prof=PROFILE)
@@ -217,6 +255,7 @@ def choose(obs: dict) -> list[int]:
     played = [0] * n
     tried = [0] * n
     total = 0
+    prior = rule_prior(obs) if PRIOR > 0 else [0.0] * n
 
     s = searcher()
     try:
@@ -230,7 +269,7 @@ def choose(obs: dict) -> list[int]:
                 break
             try:
                 while total < MAX_ROLLOUTS:
-                    i = pick_arm(score, played, tried, total)
+                    i = pick_arm(score, played, tried, total, prior)
                     if i is None:
                         break
                     tried[i] += 1
@@ -263,7 +302,8 @@ def choose(obs: dict) -> list[int]:
     # UCB は良さそうな候補に試行を寄せるので、平均値で選ぶと「2 回試して両方勝った」
     # 候補が最上位に来る。試行回数を第一基準にし、平均は同数のときの決め手にする。
     # 均等配分 (UCB なし) の場合は試行回数が並ぶので、実質は平均で決まる。
-    rates = [score[i] / played[i] if played[i] else float("-inf") for i in range(n)]
+    rates = [q_hat(i, score, played, prior) if played[i] else float("-inf")
+             for i in range(n)]
     return [max(range(n), key=lambda i: (played[i], rates[i]))]
 
 
@@ -307,7 +347,7 @@ def agent(obs: dict) -> list[int]:
             sel = obs.get("select") or {}
             cur = obs.get("current") or {}
             rec = dict(_stat)
-            rec.update(g=_game, turn=cur.get("turn"),
+            rec.update(g=_game, turn=cur.get("turn"), side=cur.get("yourIndex"),
                        t=round(dt, 4), slice=round(slice_seconds(obs), 3),
                        pool=round(_pool, 1), picked=picked,
                        sel_type=sel.get("type"), sel_ctx=sel.get("context"))
