@@ -118,6 +118,10 @@ PROFILE = policy.Profile(CONFIG, DECK)
 USE_SEARCH = bool(CONFIG.get("search", os.environ.get("PTCG_SEARCH", "1")
                              not in ("0", "", "off")))
 
+# ベンチが空のまま番を終える手を探索に選ばせない。切ると判定だけ行う
+GUARD = bool(CONFIG.get("guard", os.environ.get("PTCG_GUARD", "1")
+                        not in ("0", "", "off")))
+
 # 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
 # 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。
 USE_UCB = bool(CONFIG.get("ucb", os.environ.get("PTCG_UCB", "1") not in ("0", "", "off")))
@@ -131,10 +135,13 @@ PRIOR = float(CONFIG.get("prior", os.environ.get("PTCG_PRIOR", "1.5")))
 # 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
 # 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
 # やや小さく取り、序盤に厚く配る。
-MAX_SLICE = float(os.environ.get("PTCG_MAX_SLICE", "5.0"))
-MIN_SLICE = float(os.environ.get("PTCG_MIN_SLICE", "0.2"))
-RESERVE = float(os.environ.get("PTCG_RESERVE", "45"))
-HORIZON = float(os.environ.get("PTCG_HORIZON", "70"))
+# 対戦の両側が同じプロセスで動くので、環境変数では片側だけ変えられない。
+# 時間配分そのものを A/B にかけられるよう、config.json から上書きできる。
+# 手元で Kaggle 相当を再現するときは 8.6 で割った値を使う (docs/design.md 7.5 節)。
+MAX_SLICE = float(CONFIG.get("max_slice", os.environ.get("PTCG_MAX_SLICE", "5.0")))
+MIN_SLICE = float(CONFIG.get("min_slice", os.environ.get("PTCG_MIN_SLICE", "0.2")))
+RESERVE = float(CONFIG.get("reserve", os.environ.get("PTCG_RESERVE", "45")))
+HORIZON = float(CONFIG.get("horizon", os.environ.get("PTCG_HORIZON", "70")))
 TIME_POOL = float(os.environ.get("PTCG_TIME_POOL", "600"))
 # ローカルの kaggle_environments は runTimeout の 2000 秒をそのまま
 # remainingOverageTime として渡してくる。Kaggle 本番の 600 秒を模したい場合は
@@ -209,18 +216,21 @@ def q_hat(i: int, score: list[float], played: list[int], prior: list[float]) -> 
 
 
 def pick_arm(score: list[float], played: list[int], tried: list[int], total: int,
-             prior: list[float]) -> int | None:
+             prior: list[float], banned: set) -> int | None:
     """次にロールアウトする候補。全部が展開に失敗していれば None。"""
     n = len(tried)
     for i in range(n):
-        if not tried[i]:
+        if not tried[i] and i not in banned:
             return i  # 未試行を残したまま比較しない
     if not USE_UCB:
-        return min(range(n), key=lambda i: tried[i])
+        cand = [i for i in range(n) if i not in banned]
+        return min(cand, key=lambda i: tried[i]) if cand else None
 
     logt = math.log(max(2.0, float(sum(tried))))
     best, best_v = None, float("-inf")
     for i in range(n):
+        if i in banned:
+            continue
         # 何度試しても展開できない候補は見切る (実測では発生していない)
         if played[i] == 0 and tried[i] >= 4:
             continue
@@ -256,6 +266,15 @@ def choose(obs: dict) -> list[int]:
     tried = [0] * n
     total = 0
     prior = rule_prior(obs) if PRIOR > 0 else [0.0] * n
+    # 探索に選ばせない手。ロールアウトも割り当てない。
+    # GUARD を切ると判定だけ行い、禁止はしない。ガードが無いときに何回その手を
+    # 選んでいたかを数えるためで、これが無いとガードの価値を測れない。
+    try:
+        risky = policy.must_avoid(obs)
+    except Exception:
+        risky = set()
+    banned = risky if GUARD else set()
+    _stat["risky"] = len(risky)
 
     s = searcher()
     try:
@@ -269,7 +288,7 @@ def choose(obs: dict) -> list[int]:
                 break
             try:
                 while total < MAX_ROLLOUTS:
-                    i = pick_arm(score, played, tried, total, prior)
+                    i = pick_arm(score, played, tried, total, prior, banned)
                     if i is None:
                         break
                     tried[i] += 1
@@ -287,7 +306,8 @@ def choose(obs: dict) -> list[int]:
                     else:
                         _stat["playout_none"] += 1
                     # tried で判定する。展開に失敗し続ける候補があっても抜けられる。
-                    if time.monotonic() >= deadline and all(tried):
+                    if time.monotonic() >= deadline and all(
+                            t for i2, t in enumerate(tried) if i2 not in banned):
                         break
             finally:
                 s.release(root.search_id)
@@ -304,7 +324,13 @@ def choose(obs: dict) -> list[int]:
     # 均等配分 (UCB なし) の場合は試行回数が並ぶので、実質は平均で決まる。
     rates = [q_hat(i, score, played, prior) if played[i] else float("-inf")
              for i in range(n)]
-    return [max(range(n), key=lambda i: (played[i], rates[i]))]
+    cand = [i for i in range(n) if i not in banned] or list(range(n))
+    best = max(cand, key=lambda i: (played[i], rates[i]))
+    if risky:
+        # 危ない手を実際に選んだか。ガードを切った版で数えると、ガードが
+        # 何回の敗着を止めているかがそのまま分かる
+        _stat["blunder"] = int(best in risky)
+    return [best]
 
 
 def legal_fallback(obs: dict) -> list[int]:

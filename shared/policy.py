@@ -34,7 +34,8 @@ class Profile:
     """
 
     __slots__ = ("eps", "context_signs", "foe_target", "attack_weight",
-                 "setup_weight", "resource_weight", "name", "traits", "value_w")
+                 "setup_weight", "resource_weight", "name", "traits", "value_w",
+                 "mlp")
 
     def __init__(self, cfg: dict | None = None, deck: list[int] | None = None):
         cfg = cfg or {}
@@ -54,6 +55,16 @@ class Profile:
         # 提出物への同梱漏れが起きるため、設定の中に持たせる。
         w = cfg.get("value_weights")
         self.value_w = [float(x) for x in w] if w and len(w) == features.N else None
+        # 非線形版。特徴の数が合わなければ黙って無視する。特徴を足したあとに
+        # 古い重みを読み込んで静かに壊れるのを避けるため、長さで弾く。
+        m = cfg.get("value_mlp")
+        self.mlp = None
+        if m and len(m.get("w1") or ()) == features.N - 1:
+            # 推論は 1 手の思考で 500 回前後走る。行優先で持つと積和が素直に書ける
+            self.mlp = ([[float(x) for x in row] for row in m["w1"]],
+                        [float(x) for x in m["b1"]],
+                        [float(x) for x in m["w2"]],
+                        float(m["b2"]))
 
 
 def deck_traits(deck: list[int] | None) -> dict:
@@ -214,34 +225,11 @@ def card_value(cid: int | None) -> float:
 
 
 def effective_damage(attack_id: int | None, a: dict, me: dict, you: dict) -> int:
-    """実際に出る打点。基礎値が状況で増える技は、ここで補正する。
+    """バトル場のポケモンがその技を撃ったときの打点。実体は features 側にある。
 
-    カードデータの damage は基礎値なので、そのまま使うと Spiky Wheel (20) のような
-    技が最下位に沈む。打点が動く技だけ個別に計算する。
+    同じ計算を評価関数の特徴でも使うため、二重に書かないよう一箇所に寄せた。
     """
-    dmg = a.get("damage") or 0
-    if attack_id == 938:  # Spiky Wheel: 付いている {D} 1 個につき +40
-        act = _first(me.get("active"))
-        d = sum(1 for e in (act.get("energies") or []) if e == 7) if act else 0
-        return dmg + 40 * d
-    if attack_id == 120:  # Myriad Leaf Shower: 両者のバトル場のエネルギー 1 個につき +30
-        n = 0
-        for p in (me, you):
-            act = _first(p.get("active"))
-            n += len(act.get("energies") or []) if act else 0
-        return dmg + 30 * n
-    if attack_id == 339:  # Psychic (Alakazam): 相手のバトル場のエネルギー 1 個につき +50
-        act = _first(you.get("active"))
-        return dmg + 50 * (len(act.get("energies") or []) if act else 0)
-    if attack_id == 1072:  # Powerful Hand (Alakazam): 自分の手札 1 枚につきダメカン 2 個
-        return dmg + 20 * (me.get("handCount") or len(me.get("hand") or []))
-    if attack_id == 183:  # Cruel Arrow (Fezandipiti ex): 相手 1 体に 100 (ベンチ可)
-        return 100
-    if attack_id == 980:  # Cosmic Beam (Solrock): ベンチに Lunatone がいなければ不発
-        if not any((p or {}).get("id") == 675 for p in (me.get("bench") or [])):
-            return 0
-        return dmg
-    return dmg
+    return features.damage_of(attack_id, a, _first(me.get("active")) or {}, me, you)
 
 
 def _first(seq):
@@ -504,12 +492,24 @@ def evaluate(obs: dict, my_index: int, prof: "Profile" = DEFAULT) -> float:
 
     重みを与えられていれば学習したモデルを使う。無ければ手書きの式に落ちる。
     """
-    if prof is not None and prof.value_w is not None:
+    if prof is not None and (prof.mlp is not None or prof.value_w is not None):
         x = features.vector(obs, my_index)
-        w = prof.value_w
-        z = 0.0
-        for i in range(features.N):
-            z += w[i] * x[i]
+        if prof.mlp is not None:
+            w1, b1, w2, b2 = prof.mlp
+            z = b2
+            for j in range(len(b1)):
+                h = b1[j]
+                for i in range(1, features.N):   # 先頭は定数項なので入力に入れない
+                    xi = x[i]
+                    if xi:
+                        h += w1[i - 1][j] * xi
+                if h > 0.0:
+                    z += w2[j] * h
+        else:
+            w = prof.value_w
+            z = 0.0
+            for i in range(features.N):
+                z += w[i] * x[i]
         # ロジスティック回帰の出力 p を [-1, 1] に写す。z が大きく振れても
         # 飽和するので、上下の切り詰めは形式的な保険にすぎない。
         p = 1.0 / (1.0 + _exp(-max(-30.0, min(30.0, z))))
