@@ -131,10 +131,13 @@ PRIOR = float(CONFIG.get("prior", os.environ.get("PTCG_PRIOR", "1.5")))
 # 1 手の持ち時間は (残り - RESERVE) / HORIZON。残りが減れば自動的に細くなるので、
 # 何手かかる試合でも RESERVE を割り込まない。HORIZON は実測 (75〜120 手) より
 # やや小さく取り、序盤に厚く配る。
-MAX_SLICE = float(os.environ.get("PTCG_MAX_SLICE", "5.0"))
-MIN_SLICE = float(os.environ.get("PTCG_MIN_SLICE", "0.2"))
-RESERVE = float(os.environ.get("PTCG_RESERVE", "45"))
-HORIZON = float(os.environ.get("PTCG_HORIZON", "70"))
+# 対戦の両側が同じプロセスで動くので、環境変数では片側だけ変えられない。
+# 時間配分そのものを A/B にかけられるよう、config.json から上書きできる。
+# 手元で Kaggle 相当を再現するときは 8.6 で割った値を使う (docs/design.md 7.5 節)。
+MAX_SLICE = float(CONFIG.get("max_slice", os.environ.get("PTCG_MAX_SLICE", "5.0")))
+MIN_SLICE = float(CONFIG.get("min_slice", os.environ.get("PTCG_MIN_SLICE", "0.2")))
+RESERVE = float(CONFIG.get("reserve", os.environ.get("PTCG_RESERVE", "45")))
+HORIZON = float(CONFIG.get("horizon", os.environ.get("PTCG_HORIZON", "70")))
 TIME_POOL = float(os.environ.get("PTCG_TIME_POOL", "600"))
 # ローカルの kaggle_environments は runTimeout の 2000 秒をそのまま
 # remainingOverageTime として渡してくる。Kaggle 本番の 600 秒を模したい場合は
