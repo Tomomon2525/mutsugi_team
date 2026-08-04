@@ -360,6 +360,40 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
     return s
 
 
+def must_avoid(obs: dict) -> set:
+    """探索に選ばせてはいけない選択肢の index。
+
+    ベンチが空のまま番を終えると、バトル場の 1 体を落とされた時点で負ける。
+    サイドを 1 枚も取られないまま試合が終わるので、取り返しがつかない。
+    本番のリプレイ (89704936) では、手札に Munkidori と Buddy-Buddy Poffin を
+    抱えたまま End を選び、次の番に倒されて負けていた。
+
+    たねポケモンはベンチが空いている限り何枚でも出せる。出さずに番を終える
+    理由が無いので、その場面の End だけを禁じる。ロールアウトの勝率平均が
+    雑音に埋もれても、この手には落ちないようにする。
+    """
+    sel = obs.get("select") or {}
+    cur = obs.get("current") or {}
+    players = cur.get("players") or []
+    if len(players) < 2:
+        return set()
+    me = players[cur.get("yourIndex", 0)]
+    if any(x for x in (me.get("bench") or [])):
+        return set()
+
+    options = sel.get("option") or []
+    end = {i for i, o in enumerate(options) if o.get("type") == 14}
+    if not end or len(end) >= len(options):
+        return set()
+    for o in options:
+        if o.get("type") != 7:
+            continue
+        c = _card_of(o, sel, me)
+        if c and (ptcg.card(c.get("id")) or {}).get("basic"):
+            return end
+    return set()
+
+
 def attack_options(obs: dict) -> tuple[set, set]:
     """(攻撃できる選択肢, そのうち相手をきぜつさせられるもの) の index 集合。
 
