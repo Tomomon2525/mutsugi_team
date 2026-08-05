@@ -466,6 +466,17 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
     return s
 
 
+# ベンチが空のときに、それを埋められる札。ポフィンは直接ベンチへ出し、
+# 残りはたねを手札に持ってくるので、同じ番のうちに出せる。
+# ペトレルはトレーナーしか取れないので入れない (二段構えになり、確実性が落ちる)
+BENCH_REFILL = frozenset({
+    1086,  # Buddy-Buddy Poffin      たね 2 体をベンチへ
+    1152,  # Poké Pad                ルールボックス無しのポケモンを 1 枚
+    1231,  # Dawn                    たね・1 進化・2 進化を 1 枚ずつ
+    1259,  # Spikemuth Gym           マリィのポケモンを 1 枚
+})
+
+
 # 迷う理由が無い進化。ロールアウトの勝率平均は、じわじわ効く特性を拾えない。
 # 実際のリプレイでは、方策が 1 位に置いていても探索がひっくり返していた。
 # ユキメノコに進化が選べた 58 局面のうち、進化したのは 6 局面しかない。
@@ -554,8 +565,11 @@ def must_avoid(obs: dict) -> set:
         cid = (c or {}).get("id")
         if cid is None:
             continue
-        # ベンチが空なのにたねを出さずに終える
-        if empty_bench and (ptcg.card(cid) or {}).get("basic"):
+        # ベンチが空なのに、埋める手を持ったまま終える。バトル場の 1 体を
+        # 落とされた時点で負けるので、たね本体だけでなく、たねをベンチへ出す札と
+        # たねを手札に持ってくる札も対象にする
+        if empty_bench and ((ptcg.card(cid) or {}).get("basic")
+                            or cid in BENCH_REFILL):
             return end
         # 最初の番に、代償の無いサーチ札を抱えたまま終える
         if early and cid in SEARCH_FIRST and not (cid == 1086 and _bench_full(me)):
