@@ -188,8 +188,16 @@ FREE_SEARCH = frozenset({
 #
 # ユキワラシとユキメノコは must_avoid で禁じる。マシマシラは、他に出せるものが
 # 無い場面もあるため減点にとどめる。
-BENCH_ONLY = {860: 250.0, 104: 250.0, 112: 90.0}
-HARD_BENCH = frozenset({860, 104})
+BENCH_ONLY = {860: 250.0, 104: 300.0, 112: 90.0}
+
+# バトル場に出す順の悪さ。数字が大きいほど強く避ける。全部が対象になったら
+# 誰かを出すしかないので、悪いほうから順に外していく。
+#
+# ユキワラシとユキメノコしか残っていない場面で、両方まとめて禁じると禁止が
+# 丸ごと無効になり、ユキメノコが出てしまうことがあった。ユキメノコは特性が
+# 本体なので、失うと勝ち筋が消える。ユキワラシは進化前で、出しても損が小さい。
+BENCH_TIER = {104: 2, 860: 1}
+HARD_BENCH = frozenset(BENCH_TIER)
 # 代償なしで、1 ターンに 1 回だけ使える特性。攻撃を選ぶと番が終わるので、
 # 攻撃より先に使わないとその番のぶんが丸ごと消える。リプレイと自己対戦の
 # どちらでも、使える手番の 4 割しか使えていなかった。
@@ -515,17 +523,23 @@ def must_avoid(obs: dict) -> set:
     options = sel.get("option") or []
 
     if sel.get("context") in TO_ACTIVE:
-        bad = set()
+        tier: dict = {}
         for i, o in enumerate(options):
             if o.get("type") != 3:
                 continue
             owner = o.get("playerIndex")
             if owner is not None and owner != mi:
                 continue  # 相手の場を指す選択 (ボスの指令など) は別の話
-            if (_card_of(o, sel, me) or {}).get("id") in HARD_BENCH:
-                bad.add(i)
-        # 全部が対象なら出すしかない
-        return bad if bad and len(bad) < len(options) else set()
+            t = BENCH_TIER.get((_card_of(o, sel, me) or {}).get("id"))
+            if t:
+                tier[i] = t
+        # まずは全部外す。それだと出せる相手が居なくなる場合に限って、
+        # 損の小さいユキワラシから戻す
+        for lo in (1, 2):
+            bad = {i for i, t in tier.items() if t >= lo}
+            if bad and len(bad) < len(options):
+                return bad
+        return set()
 
     end = {i for i, o in enumerate(options) if o.get("type") == 14}
     if not end or len(end) >= len(options):
