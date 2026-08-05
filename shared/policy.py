@@ -384,7 +384,7 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         if t == 9 and cid == 648:
             s += 40  # Punk Up でエネルギー 5 枚が付くので、進化そのものが加速になる
         if t == 7:
-            s += _play_bonus(cid, me, you, cur.get("turn") or 0)
+            s += _play_bonus(cid, me, you, cur.get("turn") or 0, cur)
             if prof.traits.get("hand_hoard"):
                 # 手札枚数が打点になるデッキでは、殴れる状態が整っているのに
                 # カードを使うと自分で打点を削ることになる。準備中は減点しない。
@@ -477,6 +477,30 @@ BENCH_REFILL = frozenset({
 })
 
 
+# 攻撃を選ぶと番が終わる。手札を切る、エネルギーを付ける、特性を使う、進化する、
+# どれも番を終えないので、殴る前に済ませるのが常に正しい。
+# 本番のリプレイ 90139220 では、手札が 12 枚まで膨れてポフィン 2 枚・ポケパッド
+# 2 枚・ユキメノコ・スタジアム 2 枚を抱えたまま、毎ターン殴るだけだった。
+# 攻撃は 192 点で、どのトレーナーよりも高いためである。
+ATTACK_FLOOR = 90.0
+
+
+def pending_before_attack(sel: dict, cur: dict, me: dict, you: dict,
+                          prof: "Profile" = DEFAULT) -> bool:
+    """殴る前に済ませておくべき手が残っているか。"""
+    for o in sel.get("option") or ():
+        t = o.get("type")
+        if t == 9:
+            return True   # 進化。番を終えず、盤面が強くなるだけ
+        if t == 10 and (_card_of(o, sel, me) or {}).get("id") in FREE_ABILITY:
+            return True   # 代償のない特性。1 ターン 1 回で、使わない理由が無い
+        if t == 8 and score(o, sel, cur, me, you, prof) >= BASE[8]:
+            return True   # エネルギーを付ける。1 ターン 1 回、腐らせる意味が無い
+        if t == 7 and score(o, sel, cur, me, you, prof) >= ATTACK_FLOOR:
+            return True   # 明らかに得なトレーナー。減点が乗ったものは拾わない
+    return False
+
+
 # 迷う理由が無い進化。ロールアウトの勝率平均は、じわじわ効く特性を拾えない。
 # 実際のリプレイでは、方策が 1 位に置いていても探索がひっくり返していた。
 # ユキメノコに進化が選べた 58 局面のうち、進化したのは 6 局面しかない。
@@ -552,6 +576,12 @@ def must_avoid(obs: dict) -> set:
                 return bad
         return set()
 
+    atk = {i for i, o in enumerate(options) if o.get("type") == 13}
+    if atk and len(atk) < len(options):
+        you = players[1 - mi]
+        if pending_before_attack(sel, cur, me, you):
+            return atk
+
     end = {i for i, o in enumerate(options) if o.get("type") == 14}
     if not end or len(end) >= len(options):
         return set()
@@ -620,14 +650,10 @@ def in_play_ids(obs: dict) -> list[int]:
     return out
 
 
-# ベンチの上限。観測を数えると 5 体まで埋まっている試合があり (7〜8 体の
-# 局面も出るので、増やす手段を持つデッキもある)、3 は明らかに低すぎた。
-# ここが 3 だと、ポフィンが -45 になり、ユキワラシを出す枠も無いと判断する。
-BENCH_LIMIT = 5
-
-
 def _bench_full(me: dict) -> bool:
-    return len([p for p in (me.get("bench") or []) if p]) >= BENCH_LIMIT
+    # 上限は observation の benchMax に入っている。決め打ちにすると、増やす
+    # 手段を持つデッキで判断がずれる
+    return len([p for p in (me.get("bench") or []) if p]) >= (me.get("benchMax") or 5)
 
 
 # ループの部品。ユキメノコがダメカンを配る側、マシマシラが運ぶ側で、
@@ -697,15 +723,34 @@ def deck_after(cid: int | None, me: dict) -> int:
     return max(0, d + hand - n)
 
 
-def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
+def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0,
+                cur: dict | None = None) -> float:
     """局面によって価値が大きく動くカードだけ補正する。"""
     v = _play_bonus_base(cid, me, you, turn) + missing_bonus(cid, me)
+    v += _stadium_bonus(cid, cur, me)
     if cid in DECK_EATERS:
         # 今の残り枚数ではなく、切った後に何枚残るかで判断する。リーリエと
         # スタンプは手札を山札に戻すので、薄い山札でも通ることがある一方、
         # 手札が細いと 1 枚で山札切れまで行く
         v -= 250.0 * features.deck_ruin(deck_after(cid, me))
     return v
+
+
+STADIUM = frozenset({1259})   # スパイクタウンのジム
+
+
+def _stadium_bonus(cid: int | None, cur: dict | None, me: dict) -> float:
+    """スタジアムは張り替えられる。相手のものが出ているなら、まず剥がす。"""
+    if cid not in STADIUM or cur is None:
+        return 0.0
+    field = cur.get("stadium") or []
+    if not field:
+        return 25.0   # 場が空いている。自分だけが使える効果なら得になる
+    owner = (field[0] or {}).get("playerIndex")
+    mine = owner == cur.get("yourIndex", 0)
+    if mine and (field[0] or {}).get("id") == cid:
+        return -80.0  # 同じものを張り直しても何も起きない。手札を捨てるだけ
+    return 45.0       # 相手のものを剥がせる
 
 
 def _play_bonus_base(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
@@ -715,7 +760,7 @@ def _play_bonus_base(cid: int | None, me: dict, you: dict, turn: int = 0) -> flo
     if cid in FREE_SEARCH and turn <= EARLY_TURNS and cid != 1086:
         return 30.0  # 序盤は盤面を作る速度がそのまま勝率になる
     if cid == 1086:  # Buddy-Buddy Poffin
-        return 35.0 if len(bench) < BENCH_LIMIT else -45.0
+        return 35.0 if not _bench_full(me) else -45.0
     if cid == 1079:  # Rare Candy
         # 手札に 2 進化がいるかで判断する。デッキ固有の ID で判定すると、
         # 同じアメを使う相手デッキ (フーディン等) が常に減点になり、
