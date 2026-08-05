@@ -597,8 +597,31 @@ def _bench_full(me: dict) -> bool:
     return len([p for p in (me.get("bench") or []) if p]) >= BENCH_LIMIT
 
 
+# 山札を 1 枚以上減らす札。サーチもドローも、切るたびに山札切れが近づく。
+# ナイトスターチャーはトラッシュから拾うので入れない
+DECK_EATERS = frozenset({
+    1086,  # Buddy-Buddy Poffin
+    1152,  # Poké Pad
+    1122,  # Pokégear 3.0
+    1219,  # Team Rocket's Petrel
+    1231,  # Dawn
+    1227,  # Lillie's Determination
+    1080,  # Unfair Stamp
+})
+
+
 def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     """局面によって価値が大きく動くカードだけ補正する。"""
+    if cid in DECK_EATERS:
+        # 残りが薄いところで山札を削ると、勝ち筋を探しているうちに山札切れで
+        # 負ける。features.deck_low は残り 0 で 1.0 になる凸の値
+        low = features.deck_low(me)
+        if low:
+            return _play_bonus_base(cid, me, you, turn) - 200.0 * low
+    return _play_bonus_base(cid, me, you, turn)
+
+
+def _play_bonus_base(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     bench = [p for p in (me.get("bench") or []) if p]
     hand_ids = [c["id"] for c in (me.get("hand") or []) if c]
 
@@ -726,4 +749,8 @@ def evaluate(obs: dict, my_index: int, prof: "Profile" = DEFAULT) -> float:
     my_hand = me.get("handCount") or len(me.get("hand") or [])
     op_hand = you.get("handCount") or len(you.get("hand") or [])
     v += 0.05 * max(-1.0, min(1.0, (my_hand - op_hand) / 6.0))
+    # 山札が尽きると、次の番の最初に引けずにその場で負ける。今までこの式には
+    # 山札の項が無く、残り 0 枚の局面と 40 枚の局面が同じ点数だった
+    v -= 0.40 * features.deck_low(me)
+    v += 0.40 * features.deck_low(you)
     return max(-0.7, min(0.7, v))

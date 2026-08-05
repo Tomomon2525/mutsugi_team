@@ -67,6 +67,9 @@ NAMES = (
     "my_hits",          # 相手のバトル場を落とすのに要る攻撃回数
     "op_hits",
     "fragile_bench",    # 倒されるとサイドを 2 枚以上渡すベンチの数
+    # --- 山札切れ
+    "my_deck_low",      # 山札の残りが薄いほど 1 に近づく (2 乗して凸にしてある)
+    "op_deck_low",
 )
 
 N = len(NAMES)
@@ -224,6 +227,20 @@ def _clip(v: float) -> float:
 
 # ---------------------------------------------------------------- 固有
 
+# 山札がこの枚数を切ると危ない、という目安。番の最初に引けないとその時点で負ける
+DECK_SAFE = 8
+
+
+def deck_low(p: dict) -> float:
+    """山札切れへの近さ。残り 0 で 1.0、DECK_SAFE 以上で 0.0。
+
+    2 乗して凸にしてある。残り 7 枚と残り 1 枚の差は、線形で表すには大きすぎる。
+    """
+    d = p.get("deckCount") or 0
+    x = max(0.0, (DECK_SAFE - d)) / DECK_SAFE
+    return x * x
+
+
 def _dark_left_in_deck(me: dict) -> int:
     """山札に残っている基本闇エネの推定枚数。
 
@@ -360,4 +377,6 @@ def vector(obs: dict, my_index: int) -> list[float]:
         if c.get("ex") or c.get("megaEx"):
             fragile += 1
     out.append(_clip(fragile / 3.0))
+    out.append(deck_low(me))
+    out.append(deck_low(you))
     return out
