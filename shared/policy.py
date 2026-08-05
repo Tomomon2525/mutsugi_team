@@ -190,6 +190,12 @@ FREE_SEARCH = frozenset({
 # 無い場面もあるため減点にとどめる。
 BENCH_ONLY = {860: 250.0, 104: 250.0, 112: 90.0}
 HARD_BENCH = frozenset({860, 104})
+# 代償なしで、1 ターンに 1 回だけ使える特性。攻撃を選ぶと番が終わるので、
+# 攻撃より先に使わないとその番のぶんが丸ごと消える。リプレイと自己対戦の
+# どちらでも、使える手番の 4 割しか使えていなかった。
+#   112 マシマシラ Adrena-Brain  ダメカンを 3 個まで相手へ移す
+FREE_ABILITY = {112: 150.0}
+
 # 個数を選ぶ場面のうち、多いほうが常に良いもの。マシマシラは 3 個動かせるのに
 # 1 個や 2 個で済ませている場面が実際にあった (89692194)。
 MORE_IS_BETTER = frozenset({
@@ -423,6 +429,11 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 s += 12  # バトル場が先。ベンチに貯めても今のターンには効かない
             s += attach_value(tgt, me)
         return s
+
+    if t == 10:  # Ability
+        # 特性の選択肢は area / index で来る。inPlayArea ではない
+        v = FREE_ABILITY.get((_card_of(opt, sel, me) or {}).get("id"))
+        return v if v is not None else s
 
     if t == 0:  # Number
         n = opt.get("number")
