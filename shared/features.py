@@ -74,12 +74,45 @@ N = len(NAMES)
 
 # ---------------------------------------------------------------- 打点
 
+# 相手のバトル場に立つと、条件を満たす攻撃を丸ごと無効にする特性。カードプールを
+# "Prevent all damage" で洗って、こちらの攻撃役に刺さるものだけを拾った。
+# 判定は攻撃側のカードを見る。ベンチへの飛び火 (Shaymin など) は damage_of が
+# バトル場への打点しか返さないので、ここでは扱わない。
+def _prevented(atk: dict, dmg: int, target: dict) -> bool:
+    tid = (target or {}).get("id")
+    if tid is None:
+        return False
+    is_ex = bool(atk.get("ex") or atk.get("megaEx"))
+    if tid in (345, 330):  # Crustle / Sylveon: 相手の {ex} からは受けない
+        return is_ex
+    if tid == 117:  # Cornerstone Mask Ogerpon ex: 特性を持つポケモンからは受けない
+        return bool(atk.get("skills"))
+    if tid == 83:  # Farigiraf ex: たねの {ex} からは受けない
+        return is_ex and bool(atk.get("basic"))
+    if tid == 158:  # Drednaw: 200 以上のダメージを受けない
+        return dmg >= 200
+    return False
+
+
 def damage_of(attack_id: int | None, a: dict, poke: dict, me: dict, you: dict) -> int:
-    """その技を poke が撃ったときに実際に出る打点。
+    """その技を poke が撃ったときに、相手のバトル場に実際に入る打点。
 
     カードデータの damage は基礎値なので、そのまま使うと Spiky Wheel (20) のような
     技が最下位に沈む。打点が動く技だけ個別に計算する。
+
+    そのうえで、相手のバトル場が無効化の特性を持っていれば 0 に落とす。ロールアウトは
+    本物のエンジンを通るので勝手に 0 になるが、評価関数と方策はこの関数の値で動く。
+    通らない相手に殴りかかる手を高く見積もったままだと、探索の入口で候補が歪む。
     """
+    dmg = _base_damage(attack_id, a, poke, me, you)
+    if dmg > 0 and _prevented(ptcg.card(poke.get("id")) or {}, dmg,
+                              first(you.get("active"))):
+        return 0
+    return dmg
+
+
+def _base_damage(attack_id: int | None, a: dict, poke: dict,
+                 me: dict, you: dict) -> int:
     dmg = a.get("damage") or 0
     if attack_id == 938:  # Spiky Wheel: 付いている {D} 1 個につき +40
         d = sum(1 for e in (poke.get("energies") or []) if e == DARK)
@@ -229,8 +262,10 @@ def _deck_side(me: dict, you: dict) -> list[float]:
                  if cid in hand_ids or cid in play_ids)
 
     grim = next((x for x in in_play(me) if x.get("id") == GRIMMSNARL), None)
-    grim_now = bool(grim and best_attack(grim, me, you) >= 0)
-    grim_next = bool(grim and not grim_now and best_attack(grim, me, you, 1) >= 0)
+    # 0 打点は「撃てる」に数えない。無効化の特性を持つ相手に殴りかかっても
+    # 番が終わるだけで、脅威としては成立していない。
+    grim_now = bool(grim and best_attack(grim, me, you) > 0)
+    grim_next = bool(grim and not grim_now and best_attack(grim, me, you, 1) > 0)
 
     morpeko_e = 0
     for x in in_play(me):
@@ -238,6 +273,9 @@ def _deck_side(me: dict, you: dict) -> list[float]:
             morpeko_e = max(morpeko_e,
                             sum(1 for e in (x.get("energies") or ()) if e == DARK))
 
+    # ここは >= 0 のまま。マリィのイタズラコゾウの Filch は打点 0 なので、> 0 に
+    # すると「エネの付いたコゾウ」が後続から外れる。ミラーでの分布まで変わって
+    # 学習済みの評価関数が古くなるため、無効化の対応とは分けて扱う
     ready = sum(1 for x in in_play(me) if best_attack(x, me, you) >= 0)
     bench_ready = any(best_attack(x, me, you) >= 0
                       for x in (me.get("bench") or ()) if x)
