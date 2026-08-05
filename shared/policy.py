@@ -649,26 +649,48 @@ def missing_bonus(cid: int | None, me: dict) -> float:
     return -20.0      # それ以上はベンチを埋めて、勝ち筋の枠を潰すだけ
 
 
-# 山札を 1 枚以上減らす札。サーチもドローも、切るたびに山札切れが近づく。
-# ナイトスターチャーはトラッシュから拾うので入れない
-DECK_EATERS = frozenset({
-    1086,  # Buddy-Buddy Poffin
-    1152,  # Poké Pad
-    1122,  # Pokégear 3.0
-    1219,  # Team Rocket's Petrel
-    1231,  # Dawn
-    1227,  # Lillie's Determination
-    1080,  # Unfair Stamp
-})
+# その札を切ると山札が何枚減るか。ナイトスターチャーはトラッシュから拾うので
+# 入れない
+DECK_COST = {
+    1086: 2,   # Buddy-Buddy Poffin      たね 2 体
+    1231: 3,   # Dawn                    たね・1 進化・2 進化を 1 枚ずつ
+    1152: 1,   # Poké Pad
+    1219: 1,   # Team Rocket's Petrel
+    1122: 1,   # Pokégear 3.0
+    1259: 1,   # Spikemuth Gym
+}
+
+# 手札を山札に戻してから引く札。切った後の山札枚数がそのまま計算できる。
+# 山札が薄いほど危ないのではなく、「引く枚数に足りるか」で決まる
+SHUFFLE_DRAW = {
+    1227: 6,   # Lillie's Determination  サイドがちょうど 6 枚なら 8 枚
+    1080: 5,   # Unfair Stamp
+}
+
+DECK_EATERS = frozenset(DECK_COST) | frozenset(SHUFFLE_DRAW)
+
+
+def deck_after(cid: int | None, me: dict) -> int:
+    """その札を切った後に山札に残る枚数。"""
+    d = me.get("deckCount") or 0
+    n = SHUFFLE_DRAW.get(cid)
+    if n is None:
+        return max(0, d - DECK_COST.get(cid, 0))
+    if cid == 1227 and len(me.get("prize") or ()) == 6:
+        n = 8
+    # 自分自身はトラッシュへ行くので手札から 1 枚引く
+    hand = max(0, (me.get("handCount") or len(me.get("hand") or ())) - 1)
+    return max(0, d + hand - n)
 
 
 def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     """局面によって価値が大きく動くカードだけ補正する。"""
     v = _play_bonus_base(cid, me, you, turn) + missing_bonus(cid, me)
     if cid in DECK_EATERS:
-        # 残りが薄いところで山札を削ると、勝ち筋を探しているうちに山札切れで
-        # 負ける。features.deck_low は残り 0 で 1.0 になる凸の値
-        v -= 250.0 * features.deck_ruin(me)
+        # 今の残り枚数ではなく、切った後に何枚残るかで判断する。リーリエと
+        # スタンプは手札を山札に戻すので、薄い山札でも通ることがある一方、
+        # 手札が細いと 1 枚で山札切れまで行く
+        v -= 250.0 * features.deck_ruin(deck_after(cid, me))
     return v
 
 
@@ -802,6 +824,6 @@ def evaluate(obs: dict, my_index: int, prof: "Profile" = DEFAULT) -> float:
     v += 0.05 * max(-1.0, min(1.0, (my_hand - op_hand) / 6.0))
     # 山札が尽きると、次の番の最初に引けずにその場で負ける。今までこの式には
     # 山札の項が無く、残り 0 枚の局面と 40 枚の局面が同じ点数だった
-    v -= 0.55 * features.deck_ruin(me)
-    v += 0.55 * features.deck_ruin(you)
+    v -= 0.55 * features.deck_ruin_of(me)
+    v += 0.55 * features.deck_ruin_of(you)
     return max(-0.7, min(0.7, v))

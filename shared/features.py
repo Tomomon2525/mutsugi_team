@@ -242,20 +242,34 @@ def deck_low(p: dict) -> float:
     return x * x
 
 
-def deck_ruin(p: dict) -> float:
-    """山札切れの危なさ。手書きの評価と方策が使う判断。
+# 危険域の折れ目は、デッキに入っているドロー札の枚数に合わせる。
+# リーリエの決心は 6 枚 (サイドがちょうど 6 枚なら 8 枚)、アンフェアスタンプは
+# 5 枚引く。10 枚を切ると「次のリーリエで死ぬ」領域に入り、5 枚を切ると
+# スタンプ 1 枚で終わる。
+DECK_WATCH = 10
+DECK_TIGHT = 5
 
-    deck_low より下側を鋭くしてある。残り 2 枚まで来ると、引き直す手立てが
-    ほぼ無く、勝敗としてはほぼ決まっている。緩やかに増える形だと、探索が
-    「あと 1 枚くらい削っても」を繰り返して落ちる。
+
+def deck_ruin(d: int) -> float:
+    """山札 d 枚の危なさ。手書きの評価と方策が使う判断。0.0〜1.0。
+
+    緩やかに増えるだけの形だと、探索が「あと 1 枚くらい削っても」を繰り返して
+    落ちる。ドロー札の枚数に折れ目を置き、下側を段階的にきつくする。
+
+      10枚 0.00   8枚 0.17   6枚 0.34   5枚 0.43
+       4枚 0.58   3枚 0.73   2枚 0.88   0枚 1.00
     """
-    d = p.get("deckCount") or 0
-    if d >= DECK_SAFE:
+    if d >= DECK_WATCH:
         return 0.0
     if d <= 2:
-        return 1.0 - 0.12 * d          # 2→0.76  1→0.88  0→1.00
-    x = (DECK_SAFE - d) / DECK_SAFE
-    return 0.9 * x * x                 # 3→0.35  5→0.13  7→0.01
+        return 1.0 - 0.06 * d                      # 2→0.88  1→0.94  0→1.00
+    if d <= DECK_TIGHT:
+        return 0.88 - 0.15 * (d - 2)               # 3→0.73  4→0.58  5→0.43
+    return 0.43 * (DECK_WATCH - d) / (DECK_WATCH - DECK_TIGHT)
+
+
+def deck_ruin_of(p: dict) -> float:
+    return deck_ruin(p.get("deckCount") or 0)
 
 
 def _dark_left_in_deck(me: dict) -> int:
