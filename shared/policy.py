@@ -190,6 +190,13 @@ FREE_SEARCH = frozenset({
 # 無い場面もあるため減点にとどめる。
 BENCH_ONLY = {860: 250.0, 104: 250.0, 112: 90.0}
 HARD_BENCH = frozenset({860, 104})
+# 個数を選ぶ場面のうち、多いほうが常に良いもの。マシマシラは 3 個動かせるのに
+# 1 個や 2 個で済ませている場面が実際にあった (89692194)。
+MORE_IS_BETTER = frozenset({
+    38,  # DrawCount
+    40,  # RemoveDamageCounterCount   Adrena-Brain が動かす個数
+})
+
 TO_ACTIVE = frozenset({
     1,   # SetupActivePokemon
     3,   # Switch
@@ -387,6 +394,12 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 # 落としやすいものを狙う。残り HP が低いほど取りやすい
                 s += max(0.0, 40.0 - hp / 8.0)
             return s
+        if sel.get("context") in (16, 17) and c is not None:
+            # ダメカンを取る先・回復する先。残りが薄いものから直す。
+            # Adrena-Brain では、乗っている数がそのまま動かせる数になる
+            hp, mx = c.get("hp") or 0, c.get("maxHp") or 0
+            if mx:
+                s += 45.0 * (1.0 - hp / mx)
         if sel.get("context") in TO_ACTIVE:
             s -= BENCH_ONLY.get(cid, 0.0)
         elif sel.get("context") == 21 and c is not None and cid is not None:
@@ -409,6 +422,12 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
             if opt.get("inPlayArea") == 4:
                 s += 12  # バトル場が先。ベンチに貯めても今のターンには効かない
             s += attach_value(tgt, me)
+        return s
+
+    if t == 0:  # Number
+        n = opt.get("number")
+        if n is not None and sel.get("context") in MORE_IS_BETTER:
+            s += 12.0 * n
         return s
 
     if t == 12:  # Retreat

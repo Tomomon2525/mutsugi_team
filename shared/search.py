@@ -268,7 +268,15 @@ class Searcher:
                         return -1
                     return 0
                 if depth and steps >= depth:
-                    return policy.evaluate(node.obs, my_index, profile)
+                    # 学習データは手番側の視点だけで作る。相手の手札は観測では
+                    # 隠れていて、手番でない側のベクトルは手札由来の特徴が
+                    # 必ず 0 になるためである。打ち切りが相手の手番に当たった
+                    # ときは、相手視点で評価して符号を返し、推論を学習と揃える。
+                    # 手書きの式は差分だけで出来ているので、この変更で値は動かない
+                    mover = (node.obs.get("current") or {}).get(
+                        "yourIndex", my_index)
+                    v = policy.evaluate(node.obs, mover, profile)
+                    return v if mover == my_index else -v
                 sel = node.select
                 if not sel or not sel.get("option"):
                     return None
