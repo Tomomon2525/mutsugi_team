@@ -52,7 +52,7 @@ NAMES = (
     "morgrem_in_play",  # 進化元 (モルペコではない方) が場にいる
     "impidimp_in_play",
     "evolve_path",      # 手札から今すぐオーロンゲ ex にできる
-    "punk_up_ready",    # その進化で Punk Up が何個の基本闇エネを持ってこられるか
+    "punk_up_ready",    # その進化で Punk Up が撃てる (山札に基本闇エネが残っている)
     "punk_up_done",     # 既に撃った形跡。場の闇エネが 4 個以上でオーロンゲ ex がいる
     "line_pieces",      # 進化ラインの部品が手札と場に何種類あるか
     # --- 攻撃の準備
@@ -216,11 +216,9 @@ def _deck_side(me: dict, you: dict) -> list[float]:
 
     # 手札のオーロンゲ ex を今すぐ立てられるか。モルペコからは 1 進化を挟むので、
     # ふしぎなアメが要る。Punk Up は山札から闇エネを引くので、山札が尽きたら撃てない。
-    # 撃てるか否かではなく、何個持ってこられるかを見る。Punk Up は最大 5 個まで
-    # 付けるので、山札に 1 個しか残っていない盤面と 5 個ある盤面では価値が違う。
     path = bool(GRIMMSNARL in hand_ids
                 and (morgrem or (impidimp and RARE_CANDY in hand_ids)))
-    punk_ready = min(5, _dark_left_in_deck(me)) / 5.0 if path else 0.0
+    punk_ready = bool(path and _dark_left_in_deck(me) > 0)
 
     board_energy = sum(len(x.get("energies") or ()) for x in in_play(me))
     punk_done = bool(grim_play and board_energy >= 4)
@@ -248,7 +246,7 @@ def _deck_side(me: dict, you: dict) -> list[float]:
         1.0 if morgrem else 0.0,
         1.0 if impidimp else 0.0,
         1.0 if path else 0.0,
-        punk_ready,
+        1.0 if punk_ready else 0.0,
         1.0 if punk_done else 0.0,
         pieces / 3.0,
         1.0 if grim_now else 0.0,
