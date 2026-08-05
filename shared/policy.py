@@ -453,6 +453,37 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
     return s
 
 
+# 迷う理由が無い進化。ロールアウトの勝率平均は、じわじわ効く特性を拾えない。
+# 実際のリプレイでは、方策が 1 位に置いていても探索がひっくり返していた。
+# ユキメノコに進化が選べた 58 局面のうち、進化したのは 6 局面しかない。
+#
+#   860 ユキワラシ → 104 ユキメノコ  HP 70→90 で、場に居るだけで毎回の
+#       ポケモンチェックで特性持ち全員にダメカンが乗る。進化を遅らせて
+#       得することが無い
+FORCED_EVOLVE = frozenset({104})
+
+
+def must_take(obs: dict) -> set:
+    """探索を通さずに即決してよい選択肢の index。
+
+    must_avoid の裏返しである。禁じ手と同じく、勝率平均が雑音に埋もれても
+    この手だけは落とさないようにする。思考時間も浮く。
+    """
+    sel = obs.get("select") or {}
+    cur = obs.get("current") or {}
+    players = cur.get("players") or []
+    if len(players) < 2:
+        return set()
+    me = players[cur.get("yourIndex", 0)]
+    out = set()
+    for i, o in enumerate(sel.get("option") or ()):
+        if o.get("type") != 9:
+            continue
+        if (_card_of(o, sel, me) or {}).get("id") in FORCED_EVOLVE:
+            out.add(i)
+    return out
+
+
 def must_avoid(obs: dict) -> set:
     """探索に選ばせてはいけない選択肢の index。
 

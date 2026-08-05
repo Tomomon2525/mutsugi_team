@@ -259,6 +259,18 @@ def choose(obs: dict) -> list[int]:
     _stat.update(n=n, lo=lo, hi=hi, searched=0, begin_none=0, step_none=0,
                  playout_none=0, rollouts=0, evaluated=0)
 
+    # 迷う理由が無い手は探索を通さずに即決する。ロールアウトの勝率平均は、
+    # じわじわ効く特性を拾えない。実際に方策が 1 位に置いた進化を探索が
+    # 覆していた。
+    if hi == 1 and n > 1:
+        try:
+            forced = policy.must_take(obs)
+        except Exception:
+            forced = set()
+        if forced:
+            _stat["forced"] = 1
+            return [min(forced)]
+
     # 選択の余地がない場面では探索しない。試合の 2 割はここに該当する。
     # 複数枚を選ぶ場面 (全体の 2.8%) は先頭から取らず、方策の順位で選ぶ。
     if n <= 1 or hi != 1 or not USE_SEARCH:
