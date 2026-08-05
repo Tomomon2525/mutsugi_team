@@ -123,6 +123,12 @@ USE_SEARCH = bool(CONFIG.get("search", os.environ.get("PTCG_SEARCH", "1")
 GUARD = bool(CONFIG.get("guard", os.environ.get("PTCG_GUARD", "1")
                         not in ("0", "", "off")))
 
+# 迷う理由が無い手を探索抜きで即決するか。切ると全部探索に通す。
+# PRIOR を上げる実験が 400 戦 41.2% (z=-3.50) と大きく負けたため、
+# 「方策を強く信じる」方向そのものが害である可能性を確かめる
+FORCE = bool(CONFIG.get("force", os.environ.get("PTCG_FORCE", "1")
+                        not in ("0", "", "off")))
+
 # 相手のデッキを推定して決定化に渡すか。切ると従来どおり自分と同じデッキを仮定する
 SCOUT = bool(CONFIG.get("scout", os.environ.get("PTCG_SCOUT", "1")
                         not in ("0", "", "off")))
@@ -262,7 +268,7 @@ def choose(obs: dict) -> list[int]:
     # 迷う理由が無い手は探索を通さずに即決する。ロールアウトの勝率平均は、
     # じわじわ効く特性を拾えない。実際に方策が 1 位に置いた進化を探索が
     # 覆していた。
-    if hi == 1 and n > 1:
+    if FORCE and hi == 1 and n > 1:
         try:
             forced = policy.must_take(obs)
         except Exception:
