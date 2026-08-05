@@ -785,38 +785,54 @@ def candy_bonus(cid: int | None, me: dict) -> float:
     return 10.0
 
 
-LOOP_PIECES = {
-    860: (860, 104),   # ユキワラシ
-    104: (860, 104),   # ユキメノコ
-    112: (112,),       # マシマシラ
-}
+# 目指す盤面。バトル場を含めた数で、ベンチ上限 5 なので合計 6 体まで置ける。
+#
+#   序盤    ギモー 3 / マシマシラ 2 / ユキワラシ 1          合計 6
+#   完成後  オーロンゲ ex 1 / マシマシラ 2 / ユキメノコ 2   合計 5
+#
+# ユキワラシとユキメノコは同じ枠として数える。進化前でもそのうち化ける。
+EARLY_TARGET = (((646,), 3), ((112,), 2), ((860, 104), 1))
+LATE_TARGET = (((648,), 1), ((112,), 2), ((860, 104), 2))
+
+# 目標に足りないときの加点。埋める順序がこの大小で決まる
+WANT_SCORE = {112: 80.0, 860: 70.0, 104: 70.0, 646: 55.0, 648: 60.0}
+LOOP_PIECES = frozenset(WANT_SCORE)
+
+
+def board_target(me: dict) -> tuple:
+    """今どちらの形を目指すか。オーロンゲ ex が立ったら後半の形に切り替える。"""
+    return (LATE_TARGET
+            if any(x.get("id") == 648 for x in features.in_play(me))
+            else EARLY_TARGET)
 
 
 def missing_bonus(cid: int | None, me: dict) -> float:
-    """その枠がまだ場に無いなら加点する。手札から出す場合とサーチの両方で使う。"""
+    """目指す盤面に対して、その枠がまだ埋まっていないなら加点する。
+
+    手札から出す場合とサーチの両方で使う。同じ順序で揃えないと、サーチが
+    勝ち筋の部品を素通りする。
+    """
     if cid not in LOOP_PIECES:
         return 0.0
     ids = [x.get("id") for x in features.in_play(me)]
 
-    if cid in (860, 104):
-        if 104 in ids:
-            return -20.0          # もう働いている。2 体目は枠の無駄
-        if 860 in ids:
-            # ユキワラシは並んでいる。足りないのはユキメノコそのものなので、
-            # サーチはこちらを取りに行く。ユキワラシの 2 枚目に用は無い
-            return 70.0 if cid == 104 else -20.0
-        # ラインが場に無い。ユキメノコだけ持ってきても場に出せないので、
-        # まずユキワラシを取る
-        return 70.0 if cid == 860 else 30.0
+    # 進化は体数を増やさない。枠が埋まっていても、ユキワラシが立っている限り
+    # ユキメノコは取りに行く。ここを枠の判定に混ぜると、ユキワラシ 1 体で
+    # 目標を満たしたことになって進化先を一生引かない
+    if cid == 104 and 860 in ids and 104 not in ids:
+        return 70.0
 
-    have = ids.count(112)
-    if have == 0:
-        # ユキメノコより先。ダメカンを運ぶ側が居ないと、配っても自分の場が
-        # 削れるだけになる
-        return 80.0
-    if have == 1:
-        return 15.0   # マシマシラは 2 体目まで働く。ダメカンを運ぶ回数が増える
-    return -20.0      # それ以上はベンチを埋めて、勝ち筋の枠を潰すだけ
+    for group, want in board_target(me):
+        if cid not in group:
+            continue
+        have = sum(ids.count(g) for g in group)
+        if have >= want:
+            return -20.0          # もう足りている。これ以上はベンチの無駄
+        if group == (860, 104):
+            # ユキメノコだけ持ってきても場に出せない。まずユキワラシを取る
+            return 70.0 if cid == 860 else 30.0
+        return WANT_SCORE[cid]
+    return -20.0                  # 今の形では要らない枠
 
 
 # その札を切ると山札が何枚減るか。ナイトスターチャーはトラッシュから拾うので
