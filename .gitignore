@@ -16,3 +16,5 @@ ptcg_engine/
 *.csv
 !agents/*/deck.csv
 champions/*/agent/
+shared/field.json
+agents/*/field.json

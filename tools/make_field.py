@@ -38,7 +38,9 @@ def main() -> None:
     ap.add_argument("census", help="tools/deck_census.py の出力 CSV")
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--out", default="agents/field")
-    ap.add_argument("--template", default="agents/d3_candy/main.py")
+    ap.add_argument("--template", default="agents/d4_frost/main.py")
+    ap.add_argument("--field-json", default="shared/field.json",
+                    help="相手デッキ推定に使う表の書き出し先")
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(os.path.join(ROOT, args.census))))
@@ -72,6 +74,24 @@ def main() -> None:
     path = os.path.join(out_root, "weights.json")
     with open(path, "w") as f:
         json.dump(weights, f, ensure_ascii=False, indent=1)
+
+    # 推定用の表。対戦相手として動かすのは上位 --top だけで足りるが、推定は
+    # 裾まで持っておいたほうが当たる。デッキリストと採用率だけを出す。
+    guess_rows = []
+    gt = sum(int(r["games"]) for r in rows)
+    for i, r in enumerate(rows, 1):
+        deck = [int(x) for x in r["deck"].split(",")]
+        if len(deck) != 60:
+            continue
+        guess_rows.append({"name": slug(r["pokemon"], i),
+                           "share": int(r["games"]) / gt,
+                           "pokemon": r["pokemon"],
+                           "deck": deck})
+    gp = os.path.join(ROOT, args.field_json)
+    os.makedirs(os.path.dirname(gp), exist_ok=True)
+    with open(gp, "w") as f:
+        json.dump(guess_rows, f, ensure_ascii=False)
+    print(f"推定用の表 {len(guess_rows)} 件を {gp} に書いた")
 
     print(f"{len(weights)} デッキを {out_root} に書いた (上位 {args.top} で "
           f"公開ログの {total} 戦ぶん)")

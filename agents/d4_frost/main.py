@@ -50,7 +50,7 @@ def _load_shared() -> dict:
 
     here = _here()
     tag = "%08x" % (abs(hash(here)) & 0xFFFFFFFF)
-    order = ("enums", "ptcg", "features", "policy", "search")
+    order = ("enums", "ptcg", "features", "scout", "policy", "search")
     saved = {n: sys.modules.get(n) for n in order}
     mods: dict = {}
     try:
@@ -88,6 +88,7 @@ def _load_shared() -> dict:
 
 _SHARED = _load_shared()
 policy = _SHARED["policy"]
+scout = _SHARED.get("scout")
 ptcg = _SHARED["ptcg"]
 search = _SHARED["search"]
 
@@ -121,6 +122,13 @@ USE_SEARCH = bool(CONFIG.get("search", os.environ.get("PTCG_SEARCH", "1")
 # ベンチが空のまま番を終える手を探索に選ばせない。切ると判定だけ行う
 GUARD = bool(CONFIG.get("guard", os.environ.get("PTCG_GUARD", "1")
                         not in ("0", "", "off")))
+
+# 相手のデッキを推定して決定化に渡すか。切ると従来どおり自分と同じデッキを仮定する
+SCOUT = bool(CONFIG.get("scout", os.environ.get("PTCG_SCOUT", "1")
+                        not in ("0", "", "off")))
+# 事後確率がこれ未満なら推定を使わない。序盤は証拠が少なく、事前分布が
+# そのまま出るだけになる
+SCOUT_MIN = float(CONFIG.get("scout_min", os.environ.get("PTCG_SCOUT_MIN", "0.5")))
 
 # 候補を均等に試すと、明らかに悪い手にも同じ回数を使ってしまう。UCB1 で
 # 平均の高い候補に寄せつつ、試行回数の少ない候補も拾う。
@@ -289,13 +297,28 @@ def choose(obs: dict) -> list[int]:
     banned = risky if GUARD else set()
     _stat["risky"] = len(risky)
 
+    # 相手のデッキを推定して決定化に渡す。省略すると「相手も自分と同じデッキ」に
+    # なる。公開ログでは環境の 4 割強が別のデッキなので、その間ずっと嘘の山札で
+    # ロールアウトしていた。確信度が低いうちは従来どおりにしておく。
+    enemy_deck = None
+    if SCOUT and scout is not None:
+        try:
+            cur_ = obs["current"]
+            you_ = cur_["players"][1 - my_index]
+            guess_, conf_, name_ = scout.guess(you_)
+            _stat["scout"] = round(conf_, 2)
+            if conf_ >= SCOUT_MIN:
+                enemy_deck = guess_
+        except Exception:
+            enemy_deck = None
+
     s = searcher()
     try:
         for d in range(DETERMINIZATIONS):
             # 2 通り目以降は、時間が余っている場合だけ引き直す
             if d and time.monotonic() >= deadline:
                 break
-            root = s.begin(obs, DECK)
+            root = s.begin(obs, DECK, enemy_deck=enemy_deck)
             if root is None:
                 _stat["begin_none"] += 1
                 break
