@@ -400,11 +400,6 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 # 落としやすいものを狙う。残り HP が低いほど取りやすい
                 s += max(0.0, 40.0 - hp / 8.0)
             return s
-        if d_ctx := direction(sel.get("context")):
-            if d_ctx > 0 and sel.get("context") not in TO_ACTIVE:
-                # 山札やトラッシュから持ってくる先。手札から出すときと同じ順で
-                # 揃えないと、サーチが勝ち筋の部品を素通りする
-                s += missing_bonus(cid, me)
         if sel.get("context") in (16, 17) and c is not None:
             # ダメカンを取る先・回復する先。残りが薄いものから直す。
             # Adrena-Brain では、乗っている数がそのまま動かせる数になる
@@ -456,37 +451,6 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         return s
 
     return s
-
-
-# 迷う理由が無い進化。ロールアウトの勝率平均は、じわじわ効く特性を拾えない。
-# 実際のリプレイでは、方策が 1 位に置いていても探索がひっくり返していた。
-# ユキメノコに進化が選べた 58 局面のうち、進化したのは 6 局面しかない。
-#
-#   860 ユキワラシ → 104 ユキメノコ  HP 70→90 で、場に居るだけで毎回の
-#       ポケモンチェックで特性持ち全員にダメカンが乗る。進化を遅らせて
-#       得することが無い
-FORCED_EVOLVE = frozenset({104})
-
-
-def must_take(obs: dict) -> set:
-    """探索を通さずに即決してよい選択肢の index。
-
-    must_avoid の裏返しである。禁じ手と同じく、勝率平均が雑音に埋もれても
-    この手だけは落とさないようにする。思考時間も浮く。
-    """
-    sel = obs.get("select") or {}
-    cur = obs.get("current") or {}
-    players = cur.get("players") or []
-    if len(players) < 2:
-        return set()
-    me = players[cur.get("yourIndex", 0)]
-    out = set()
-    for i, o in enumerate(sel.get("option") or ()):
-        if o.get("type") != 9:
-            continue
-        if (_card_of(o, sel, me) or {}).get("id") in FORCED_EVOLVE:
-            out.add(i)
-    return out
 
 
 def must_avoid(obs: dict) -> set:
@@ -602,63 +566,8 @@ def _bench_full(me: dict) -> bool:
     return len([p for p in (me.get("bench") or []) if p]) >= BENCH_LIMIT
 
 
-# ループの部品。ユキメノコがダメカンを配る側、マシマシラが運ぶ側で、
-# 片方だけ場に居ても何も起きない。まだ場に無いものを最優先で並べる。
-# ユキワラシとユキメノコは同じ枠として数える (進化前でもそのうち化ける)
-LOOP_PIECES = {
-    860: (860, 104),   # ユキワラシ
-    104: (860, 104),   # ユキメノコ
-    112: (112,),       # マシマシラ
-}
-
-
-def missing_bonus(cid: int | None, me: dict) -> float:
-    """その枠がまだ場に無いなら加点する。手札から出す場合とサーチの両方で使う。"""
-    if cid not in LOOP_PIECES:
-        return 0.0
-    ids = [x.get("id") for x in features.in_play(me)]
-
-    if cid in (860, 104):
-        if 104 in ids:
-            return -20.0          # もう働いている。2 体目は枠の無駄
-        if 860 in ids:
-            # ユキワラシは並んでいる。足りないのはユキメノコそのものなので、
-            # サーチはこちらを取りに行く。ユキワラシの 2 枚目に用は無い
-            return 70.0 if cid == 104 else -20.0
-        return 60.0               # ラインが場に無い。どちらでもよい
-
-    have = ids.count(112)
-    if have == 0:
-        return 60.0
-    if have == 1:
-        return 15.0   # マシマシラは 2 体目まで働く。ダメカンを運ぶ回数が増える
-    return -20.0      # それ以上はベンチを埋めて、勝ち筋の枠を潰すだけ
-
-
-# 山札を 1 枚以上減らす札。サーチもドローも、切るたびに山札切れが近づく。
-# ナイトスターチャーはトラッシュから拾うので入れない
-DECK_EATERS = frozenset({
-    1086,  # Buddy-Buddy Poffin
-    1152,  # Poké Pad
-    1122,  # Pokégear 3.0
-    1219,  # Team Rocket's Petrel
-    1231,  # Dawn
-    1227,  # Lillie's Determination
-    1080,  # Unfair Stamp
-})
-
-
 def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     """局面によって価値が大きく動くカードだけ補正する。"""
-    v = _play_bonus_base(cid, me, you, turn) + missing_bonus(cid, me)
-    if cid in DECK_EATERS:
-        # 残りが薄いところで山札を削ると、勝ち筋を探しているうちに山札切れで
-        # 負ける。features.deck_low は残り 0 で 1.0 になる凸の値
-        v -= 200.0 * features.deck_low(me)
-    return v
-
-
-def _play_bonus_base(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     bench = [p for p in (me.get("bench") or []) if p]
     hand_ids = [c["id"] for c in (me.get("hand") or []) if c]
 
@@ -786,8 +695,4 @@ def evaluate(obs: dict, my_index: int, prof: "Profile" = DEFAULT) -> float:
     my_hand = me.get("handCount") or len(me.get("hand") or [])
     op_hand = you.get("handCount") or len(you.get("hand") or [])
     v += 0.05 * max(-1.0, min(1.0, (my_hand - op_hand) / 6.0))
-    # 山札が尽きると、次の番の最初に引けずにその場で負ける。今までこの式には
-    # 山札の項が無く、残り 0 枚の局面と 40 枚の局面が同じ点数だった
-    v -= 0.40 * features.deck_low(me)
-    v += 0.40 * features.deck_low(you)
     return max(-0.7, min(0.7, v))
