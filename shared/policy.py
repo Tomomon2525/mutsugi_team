@@ -165,6 +165,26 @@ CARD_VALUE = {
     1159: 25,  # Hero's Cape
 }
 
+# 手札が 1 枚減る以外に代償の無いサーチ札。抱えていても何も生まない。
+# Lillie's (手札を山札に戻す) と Unfair Stamp (使用条件つき) は状況で
+# 良し悪しが変わるため入れない。
+FREE_SEARCH = frozenset({
+    1086,  # Buddy-Buddy Poffin   たね 2 体をベンチへ
+    1152,  # Poké Pad             ルールボックス無しのポケモンを 1 枚
+    1122,  # Pokégear 3.0         上 7 枚からサポートを 1 枚
+    1219,  # Team Rocket's Petrel トレーナーを 1 枚
+    1231,  # Dawn                 進化ラインを 1 枚ずつ
+})
+
+# そのうち、序盤は何より先に切るもの。手札を見てから他の手を決めたほうが
+# 選択の幅が広がる。攻撃すると番が終わるので、サーチを先に済ませるのは常に正しい。
+SEARCH_FIRST = frozenset({1086, 1152, 1122})
+EARLY_TURNS = 4
+
+# 他のどの Play よりも上に来る値。オーロンゲ ex への進化 (220) だけは上に置く。
+# 3 枚の間の順序はカード価値で決める。同点にすると選択肢の並び順で決まってしまう
+SEARCH_FIRST_SCORE = 200.0
+
 _DEFAULT_BY_TYPE = {0: 55, 1: 45, 2: 50, 3: 45, 4: 40, 5: 40}
 
 # SelectContext ごとの、カード価値をどちら向きに使うか。
@@ -285,11 +305,15 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         # 手札から出す・進化させるのは常に自陣を強くする行動なので向きは正
         c = _card_of(opt, sel, me)
         cid = c.get("id") if c else None
+        if (t == 7 and cid in SEARCH_FIRST
+                and (cur.get("turn") or 0) <= EARLY_TURNS
+                and not (cid == 1086 and _bench_full(me))):
+            return SEARCH_FIRST_SCORE + 0.1 * card_value(cid)
         s += prof.setup_weight * card_value(cid)
         if t == 9 and cid == 648:
             s += 40  # Punk Up でエネルギー 5 枚が付くので、進化そのものが加速になる
         if t == 7:
-            s += _play_bonus(cid, me, you)
+            s += _play_bonus(cid, me, you, cur.get("turn") or 0)
             if prof.traits.get("hand_hoard"):
                 # 手札枚数が打点になるデッキでは、殴れる状態が整っているのに
                 # カードを使うと自分で打点を削ることになる。準備中は減点しない。
@@ -329,7 +353,11 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
             n = len(tgt.get("energies") or [])
             if opt.get("inPlayArea") == 4:
                 s += 12  # バトル場が先。ベンチに貯めても今のターンには効かない
-            if tgt.get("id") == 649:
+            if tgt.get("id") == 112:
+                # Adrena-Brain は {D} が 1 個でも付いていれば使える。ダメカンを
+                # 3 個動かせるので 1 個目の価値が高い。攻撃役ではないので 2 個目は無駄
+                s += 35.0 if n == 0 else -30.0
+            elif tgt.get("id") == 649:
                 # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
                 # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
                 s += 8 * min(5, n + 1)
@@ -366,18 +394,25 @@ def must_avoid(obs: dict) -> set:
     if len(players) < 2:
         return set()
     me = players[cur.get("yourIndex", 0)]
-    if any(x for x in (me.get("bench") or [])):
-        return set()
-
     options = sel.get("option") or []
     end = {i for i, o in enumerate(options) if o.get("type") == 14}
     if not end or len(end) >= len(options):
         return set()
+
+    empty_bench = not any(x for x in (me.get("bench") or []))
+    early = (cur.get("turn") or 0) <= 2
     for o in options:
         if o.get("type") != 7:
             continue
         c = _card_of(o, sel, me)
-        if c and (ptcg.card(c.get("id")) or {}).get("basic"):
+        cid = (c or {}).get("id")
+        if cid is None:
+            continue
+        # ベンチが空なのにたねを出さずに終える
+        if empty_bench and (ptcg.card(cid) or {}).get("basic"):
+            return end
+        # 最初の番に、代償の無いサーチ札を抱えたまま終える
+        if early and cid in SEARCH_FIRST and not (cid == 1086 and _bench_full(me)):
             return end
     return set()
 
@@ -425,11 +460,17 @@ def in_play_ids(obs: dict) -> list[int]:
     return out
 
 
-def _play_bonus(cid: int | None, me: dict, you: dict) -> float:
+def _bench_full(me: dict) -> bool:
+    return len([p for p in (me.get("bench") or []) if p]) >= 3
+
+
+def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     """局面によって価値が大きく動くカードだけ補正する。"""
     bench = [p for p in (me.get("bench") or []) if p]
     hand_ids = [c["id"] for c in (me.get("hand") or []) if c]
 
+    if cid in FREE_SEARCH and turn <= EARLY_TURNS and cid != 1086:
+        return 30.0  # 序盤は盤面を作る速度がそのまま勝率になる
     if cid == 1086:  # Buddy-Buddy Poffin
         return 35.0 if len(bench) < 3 else -45.0
     if cid == 1079:  # Rare Candy
