@@ -350,6 +350,10 @@ def attach_value(tgt: dict, me: dict) -> float:
         # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
         # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
         return 8.0 * min(5, n + 1)
+    if cid == 648:
+        # Shadow Bullet は {D}{D}。3 個目以降は打点も耐久も変わらないので、
+        # 手貼りの 1 回を捨てているだけになる。2 個目までは何より優先する
+        return 45.0 if n < 2 else -60.0
     if cid in (104, 860):
         return -25.0  # 技を撃たせるつもりが無い。特性はエネルギーを要求しない
     if n < 2:
@@ -486,8 +490,14 @@ ATTACK_FLOOR = 90.0
 
 
 def pending_before_attack(sel: dict, cur: dict, me: dict, you: dict,
-                          prof: "Profile" = DEFAULT) -> bool:
-    """殴る前に済ませておくべき手が残っているか。"""
+                          prof: "Profile" = DEFAULT,
+                          skip: frozenset = frozenset(),
+                          no_supporter: bool = False) -> bool:
+    """先に済ませておくべき手が残っているか。
+
+    skip に入れたカードは「先にやること」から外す。手札を山札に戻す札は、
+    自分自身が判定に混ざると永久に順番が回ってこない。
+    """
     for o in sel.get("option") or ():
         t = o.get("type")
         if t == 9:
@@ -496,8 +506,14 @@ def pending_before_attack(sel: dict, cur: dict, me: dict, you: dict,
             return True   # 代償のない特性。1 ターン 1 回で、使わない理由が無い
         if t == 8 and score(o, sel, cur, me, you, prof) >= BASE[8]:
             return True   # エネルギーを付ける。1 ターン 1 回、腐らせる意味が無い
-        if t == 7 and score(o, sel, cur, me, you, prof) >= ATTACK_FLOOR:
-            return True   # 明らかに得なトレーナー。減点が乗ったものは拾わない
+        if t == 7:
+            cid = (_card_of(o, sel, me) or {}).get("id")
+            if cid in skip:
+                continue
+            if no_supporter and (ptcg.card(cid) or {}).get("cardType") == 3:
+                continue   # サポートは 1 ターン 1 枚。抱えて待つ価値がある
+            if score(o, sel, cur, me, you, prof) >= ATTACK_FLOOR:
+                return True   # 明らかに得なトレーナー。減点が乗ったものは拾わない
     return False
 
 
@@ -576,11 +592,22 @@ def must_avoid(obs: dict) -> set:
                 return bad
         return set()
 
+    you = players[1 - mi]
+
     atk = {i for i, o in enumerate(options) if o.get("type") == 13}
     if atk and len(atk) < len(options):
-        you = players[1 - mi]
         if pending_before_attack(sel, cur, me, you):
             return atk
+
+    # 手札を山札に戻してから引く札は、出しておきたいものを全部出したあとに
+    # 切る。スタジアムを抱えたままアンフェアスタンプを使うと、そのまま
+    # 山札に戻ってしまう。自分自身は判定から外す (2 枚あっても同じ)
+    shuf = {i for i, o in enumerate(options)
+            if o.get("type") == 7
+            and (_card_of(o, sel, me) or {}).get("id") in SHUFFLE_DRAW}
+    if shuf and len(shuf) < len(options):
+        if pending_before_attack(sel, cur, me, you, skip=SHUFFLE_DRAW):
+            return shuf
 
     end = {i for i, o in enumerate(options) if o.get("type") == 14}
     if not end or len(end) >= len(options):
@@ -604,6 +631,12 @@ def must_avoid(obs: dict) -> set:
         # 最初の番に、代償の無いサーチ札を抱えたまま終える
         if early and cid in SEARCH_FIRST and not (cid == 1086 and _bench_full(me)):
             return end
+
+    # 明らかに得な手を残したまま番を渡さない。カードは手札にある間は何もしない。
+    # リプレイでは、番を終えた 89 局面のうち 38 局面 (43%) が 90 点以上の手を
+    # 抱えたままだった。ポケパッド 7、ポフィン 5、ペトレル 5、コゾウ 6 など
+    if pending_before_attack(sel, cur, me, you, no_supporter=True):
+        return end
     return set()
 
 
