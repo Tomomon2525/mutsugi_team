@@ -668,7 +668,7 @@ def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     if cid in DECK_EATERS:
         # 残りが薄いところで山札を削ると、勝ち筋を探しているうちに山札切れで
         # 負ける。features.deck_low は残り 0 で 1.0 になる凸の値
-        v -= 200.0 * features.deck_low(me)
+        v -= 250.0 * features.deck_ruin(me)
     return v
 
 
@@ -802,6 +802,6 @@ def evaluate(obs: dict, my_index: int, prof: "Profile" = DEFAULT) -> float:
     v += 0.05 * max(-1.0, min(1.0, (my_hand - op_hand) / 6.0))
     # 山札が尽きると、次の番の最初に引けずにその場で負ける。今までこの式には
     # 山札の項が無く、残り 0 枚の局面と 40 枚の局面が同じ点数だった
-    v -= 0.40 * features.deck_low(me)
-    v += 0.40 * features.deck_low(you)
+    v -= 0.55 * features.deck_ruin(me)
+    v += 0.55 * features.deck_ruin(you)
     return max(-0.7, min(0.7, v))

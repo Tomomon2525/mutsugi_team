@@ -232,13 +232,30 @@ DECK_SAFE = 8
 
 
 def deck_low(p: dict) -> float:
-    """山札切れへの近さ。残り 0 で 1.0、DECK_SAFE 以上で 0.0。
+    """山札切れへの近さ。残り 0 で 1.0、DECK_SAFE 以上で 0.0。学習の入力用。
 
-    2 乗して凸にしてある。残り 7 枚と残り 1 枚の差は、線形で表すには大きすぎる。
+    2 乗して凸にしてある。ここは素直な形にしておき、どれくらい効くかは
+    学習に任せる。手書きの判断は deck_ruin のほうを使う。
     """
     d = p.get("deckCount") or 0
     x = max(0.0, (DECK_SAFE - d)) / DECK_SAFE
     return x * x
+
+
+def deck_ruin(p: dict) -> float:
+    """山札切れの危なさ。手書きの評価と方策が使う判断。
+
+    deck_low より下側を鋭くしてある。残り 2 枚まで来ると、引き直す手立てが
+    ほぼ無く、勝敗としてはほぼ決まっている。緩やかに増える形だと、探索が
+    「あと 1 枚くらい削っても」を繰り返して落ちる。
+    """
+    d = p.get("deckCount") or 0
+    if d >= DECK_SAFE:
+        return 0.0
+    if d <= 2:
+        return 1.0 - 0.12 * d          # 2→0.76  1→0.88  0→1.00
+    x = (DECK_SAFE - d) / DECK_SAFE
+    return 0.9 * x * x                 # 3→0.35  5→0.13  7→0.01
 
 
 def _dark_left_in_deck(me: dict) -> int:
