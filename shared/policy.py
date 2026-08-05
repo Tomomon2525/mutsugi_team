@@ -123,8 +123,8 @@ CARD_VALUE = {
     1097: 45,  # Night Stretcher
     7: 42,     # Basic {D} Energy
     1080: 40,  # Unfair Stamp
-    104: 32,   # Froslass
-    860: 28,   # Snorunt
+    104: 72,   # Froslass    ベンチから毎ターン特性持ち全員にダメカンを配る
+    860: 55,   # Snorunt     ユキメノコへの唯一の経路
     1122: 28,  # Pokégear 3.0
     1137: 12,  # Tool Scrapper
     # --- 環境デッキ側の主要カード。相手をルールベース以上の強さで動かすために置く。
@@ -174,6 +174,26 @@ FREE_SEARCH = frozenset({
     1122,  # Pokégear 3.0         上 7 枚からサポートを 1 枚
     1219,  # Team Rocket's Petrel トレーナーを 1 枚
     1231,  # Dawn                 進化ラインを 1 枚ずつ
+})
+
+# ベンチに置いたままでないと仕事をしないポケモン。バトル場に出すと特性が止まり、
+# そのうえ落とされてサイドを渡す。本番のリプレイ 89696303 では、イタズラコゾウが
+# 手札にあるのに開始時のバトル場にユキワラシを選んでいた。
+#
+#   860 ユキワラシ / 104 ユキメノコ   Freezing Shroud は場に居るだけで、毎回の
+#       ポケモンチェックで特性を持つポケモン全員にダメカンを 1 個乗せる。
+#       ユキメノコ自身は対象外。HP90 でバトル場に立つ理由が無い
+#   112 マシマシラ   Adrena-Brain はベンチから使える。超エネを入れていないので
+#       バトル場に出しても技が撃てず、ただの的になる
+#
+# ユキワラシとユキメノコは must_avoid で禁じる。マシマシラは、他に出せるものが
+# 無い場面もあるため減点にとどめる。
+BENCH_ONLY = {860: 250.0, 104: 250.0, 112: 90.0}
+HARD_BENCH = frozenset({860, 104})
+TO_ACTIVE = frozenset({
+    1,   # SetupActivePokemon
+    3,   # Switch
+    4,   # ToActive
 })
 
 # そのうち、序盤は何より先に切るもの。手札を見てから他の手を決めたほうが
@@ -286,6 +306,36 @@ def _card_of(opt: dict, sel: dict, me: dict) -> dict | None:
     return _in_play(me, area, index)
 
 
+def attach_value(tgt: dict, me: dict) -> float:
+    """闇エネルギー 1 個をこのポケモンに付ける価値。
+
+    手貼りと Punk Up の付け先で同じ判断をするので、1 箇所にまとめてある。
+    """
+    n = len(tgt.get("energies") or [])
+    cid = tgt.get("id")
+
+    if cid == 112:
+        # Adrena-Brain は {D} が 1 個でも付いていれば使える。ダメカンを 3 個
+        # 動かせるので 1 個目の価値が高い。攻撃役ではないので 2 個目は無駄。
+        # 4 枚積んでいるが、全部に配るとオーロンゲ ex に 2 個が回らない。
+        # 既に動けるマシマシラが増えるほど、次の 1 個の価値を下げる。
+        if n:
+            return -30.0
+        armed = sum(1 for x in features.in_play(me)
+                    if x.get("id") == 112
+                    and any(e == features.DARK for e in (x.get("energies") or ())))
+        return max(6.0, 35.0 - 9.0 * armed)
+    if cid == 649:
+        # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
+        # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
+        return 8.0 * min(5, n + 1)
+    if cid in (104, 860):
+        return -25.0  # 技を撃たせるつもりが無い。特性はエネルギーを要求しない
+    if n < 2:
+        return 10.0
+    return -6.0 * (n - 1)  # 3 枚目以降は腐る
+
+
 def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
           prof: "Profile" = DEFAULT) -> float:
     t = opt.get("type")
@@ -337,6 +387,12 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 # 落としやすいものを狙う。残り HP が低いほど取りやすい
                 s += max(0.0, 40.0 - hp / 8.0)
             return s
+        if sel.get("context") in TO_ACTIVE:
+            s -= BENCH_ONLY.get(cid, 0.0)
+        elif sel.get("context") == 21 and c is not None and cid is not None:
+            # Punk Up の付け先。option type が 3 で来るので Attach の分岐に
+            # 入らず、これまで全ての候補が同点だった
+            return s + attach_value(c, me)
         d = direction(sel.get("context")) if prof.context_signs else 1
         if d < 0 and prof.traits.get("discard_energy"):
             c2 = ptcg.card(cid)
@@ -350,27 +406,18 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
     if t == 8:  # Attach
         tgt = _in_play(me, opt.get("inPlayArea"), opt.get("inPlayIndex"))
         if tgt is not None:
-            n = len(tgt.get("energies") or [])
             if opt.get("inPlayArea") == 4:
                 s += 12  # バトル場が先。ベンチに貯めても今のターンには効かない
-            if tgt.get("id") == 112:
-                # Adrena-Brain は {D} が 1 個でも付いていれば使える。ダメカンを
-                # 3 個動かせるので 1 個目の価値が高い。攻撃役ではないので 2 個目は無駄
-                s += 35.0 if n == 0 else -30.0
-            elif tgt.get("id") == 649:
-                # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
-                # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
-                s += 8 * min(5, n + 1)
-            elif n < 2:
-                s += 10
-            else:
-                s -= 6 * (n - 1)  # 3 枚目以降は腐る
+            s += attach_value(tgt, me)
         return s
 
     if t == 12:  # Retreat
         act = _first(me.get("active"))
         if act and act.get("maxHp") and (act.get("hp") or 0) * 3 <= act["maxHp"]:
             s += 25  # 瀕死なら下げる価値がある
+        if act and act.get("id") in BENCH_ONLY:
+            # 相手のボスの指令などで引きずり出された場合。戻すのを最優先にする
+            s += 60 if act.get("id") in HARD_BENCH else 30
         return s
 
     return s
@@ -387,14 +434,33 @@ def must_avoid(obs: dict) -> set:
     たねポケモンはベンチが空いている限り何枚でも出せる。出さずに番を終える
     理由が無いので、その場面の End だけを禁じる。ロールアウトの勝率平均が
     雑音に埋もれても、この手には落ちないようにする。
+
+    もう一つ、ユキワラシとユキメノコをバトル場に出す手も禁じる。この 2 枚は
+    ベンチに居ることで仕事をする。減点だけでは探索がひっくり返してしまうため、
+    他に出せるものがある限り候補から外す。
     """
     sel = obs.get("select") or {}
     cur = obs.get("current") or {}
     players = cur.get("players") or []
     if len(players) < 2:
         return set()
-    me = players[cur.get("yourIndex", 0)]
+    mi = cur.get("yourIndex", 0)
+    me = players[mi]
     options = sel.get("option") or []
+
+    if sel.get("context") in TO_ACTIVE:
+        bad = set()
+        for i, o in enumerate(options):
+            if o.get("type") != 3:
+                continue
+            owner = o.get("playerIndex")
+            if owner is not None and owner != mi:
+                continue  # 相手の場を指す選択 (ボスの指令など) は別の話
+            if (_card_of(o, sel, me) or {}).get("id") in HARD_BENCH:
+                bad.add(i)
+        # 全部が対象なら出すしかない
+        return bad if bad and len(bad) < len(options) else set()
+
     end = {i for i, o in enumerate(options) if o.get("type") == 14}
     if not end or len(end) >= len(options):
         return set()
