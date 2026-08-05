@@ -578,10 +578,11 @@ def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
 
 
 def picks(obs: dict, rng, eps: float | None = None, jitter: float = 6.0,
-          prof: "Profile" = DEFAULT) -> list[int]:
+          prof: "Profile" = DEFAULT, banned: set | None = None) -> list[int]:
     """この局面で打つ手。eps の確率で一様ランダムに落とす。
 
     根で使うときは eps=0.0, jitter=0.0 を渡して、雑音を入れずに順位だけで決める。
+    banned を渡すと、その index を候補から外す。全部が対象なら無視する。
     """
     if eps is None:
         eps = prof.eps
@@ -605,9 +606,10 @@ def picks(obs: dict, rng, eps: float | None = None, jitter: float = 6.0,
         return rng.sample(range(n), k)
     me, you = players[mi], players[1 - mi]
 
+    pool = [i for i in range(n) if not banned or i not in banned] or list(range(n))
     # 同点の候補が並ぶ場面が多いので、乱数を足して順位を崩す
     ranked = sorted(
-        range(n),
+        pool,
         key=lambda i: -(score(options[i], sel, cur, me, you, prof) + rng.random() * jitter),
     )
     return ranked[:k]

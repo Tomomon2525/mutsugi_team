@@ -256,7 +256,20 @@ def choose(obs: dict) -> list[int]:
     if n <= 1 or hi != 1 or not USE_SEARCH:
         if USE_POLICY is False:
             return list(range(hi if hi > 0 else lo))
-        return policy.picks(obs, random, eps=0.0, jitter=0.0, prof=PROFILE)
+        picks = policy.picks(obs, random, eps=0.0, jitter=0.0, prof=PROFILE)
+        # 探索を通らない経路でも禁じ手は避ける。探索を切って回す学習データの
+        # 収集が、本番と違う手を選んでいては意味がない
+        if GUARD and n > 1:
+            try:
+                risky = policy.must_avoid(obs)
+            except Exception:
+                risky = set()
+            if risky and not set(picks) - risky:
+                rest = [i for i in range(n) if i not in risky]
+                if rest:
+                    picks = policy.picks(obs, random, eps=0.0, jitter=0.0,
+                                         prof=PROFILE, banned=risky) or [rest[0]]
+        return picks
 
     _stat["searched"] = 1
     deadline = time.monotonic() + slice_seconds(obs)
