@@ -338,22 +338,23 @@ def attach_value(tgt: dict, me: dict) -> float:
     if cid == 112:
         # Adrena-Brain は {D} が 1 個でも付いていれば使える。ダメカンを 3 個
         # 動かせるので 1 個目の価値が高い。攻撃役ではないので 2 個目は無駄。
-        # 4 枚積んでいるが、全部に配るとオーロンゲ ex に 2 個が回らない。
-        # 既に動けるマシマシラが増えるほど、次の 1 個の価値を下げる。
+        # オーロンゲ ex は Punk Up が山札から最大 5 個付けるため、手貼りの 1 回は
+        # こちらに使うほうが得になる。
         if n:
             return -30.0
         armed = sum(1 for x in features.in_play(me)
                     if x.get("id") == 112
                     and any(e == features.DARK for e in (x.get("energies") or ())))
-        return max(6.0, 35.0 - 9.0 * armed)
+        return max(8.0, 50.0 - 10.0 * armed)
     if cid == 649:
         # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
         # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
         return 8.0 * min(5, n + 1)
     if cid == 648:
-        # Shadow Bullet は {D}{D}。3 個目以降は打点も耐久も変わらないので、
-        # 手貼りの 1 回を捨てているだけになる。2 個目までは何より優先する
-        return 45.0 if n < 2 else -60.0
+        # Shadow Bullet は {D}{D}。エネルギーは Punk Up が山札から持ってくるので、
+        # 手貼りは基本しない。ただし進化できない番が続くと撃てないまま止まるため、
+        # 2 個目までは保険として弱めに加点する。3 個目以降は無駄でしかない
+        return 20.0 if n < 2 else -60.0
     if cid in (104, 860):
         return -25.0  # 技を撃たせるつもりが無い。特性はエネルギーを要求しない
     if n < 2:
@@ -417,6 +418,8 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 # 山札やトラッシュから持ってくる先。手札から出すときと同じ順で
                 # 揃えないと、サーチが勝ち筋の部品を素通りする
                 s += missing_bonus(cid, me)
+                s += candy_bonus(cid, me)
+                s += search_bonus(cid, me)
         if sel.get("context") in (16, 17) and c is not None:
             # ダメカンを取る先・回復する先。残りが薄いものから直す。
             # Adrena-Brain では、乗っている数がそのまま動かせる数になる
@@ -540,11 +543,25 @@ def must_take(obs: dict) -> set:
         return set()
     me = players[cur.get("yourIndex", 0)]
     out = set()
-    for i, o in enumerate(sel.get("option") or ()):
+    options = sel.get("option") or ()
+    for i, o in enumerate(options):
         if o.get("type") != 9:
             continue
         if (_card_of(o, sel, me) or {}).get("id") in FORCED_EVOLVE:
             out.add(i)
+    if out:
+        return out
+
+    # 山札サーチで、今すぐ 2 進化を飛ばせるふしぎなアメ。方策は 1 位に置いて
+    # いたが探索が覆していた (リプレイで 13 回中 0 回しか取っていない)
+    if direction(sel.get("context")) > 0 and int(sel.get("maxCount") or 0) == 1:
+        hand = [c["id"] for c in (me.get("hand") or ()) if c]
+        play = [x.get("id") for x in features.in_play(me)]
+        if (648 in hand and (646 in play or 649 in play)
+                and hand.count(RARE_CANDY) == 0):
+            for i, o in enumerate(options):
+                if (_card_of(o, sel, me) or {}).get("id") == RARE_CANDY:
+                    return {i}
     return out
 
 
@@ -692,6 +709,82 @@ def _bench_full(me: dict) -> bool:
 # ループの部品。ユキメノコがダメカンを配る側、マシマシラが運ぶ側で、
 # 片方だけ場に居ても何も起きない。まだ場に無いものを最優先で並べる。
 # ユキワラシとユキメノコは同じ枠として数える (進化前でもそのうち化ける)
+RARE_CANDY = 1079
+
+
+def search_bonus(cid: int | None, me: dict) -> float:
+    """山札やトラッシュから 1 枚取るときの、局面ごとの上乗せ。
+
+    静的な価値表だけで選ぶと、いつでも同じ順で取ってしまう。実際には
+    「たねが居ないならポフィン、オーロンゲを作れるならアメ」のように、
+    そのとき欠けているものが最優先になる。ここは盤面を見て決める。
+    """
+    if cid is None:
+        return 0.0
+    hand = [c["id"] for c in (me.get("hand") or ()) if c]
+    play = [x.get("id") for x in features.in_play(me)]
+    basics = sum(1 for i in play if (ptcg.card(i) or {}).get("basic"))
+    line_base = 646 in play or 649 in play          # 進化元のたね
+    candy = RARE_CANDY in hand
+
+    if cid == 1086:                                  # なかよしポフィン
+        if _bench_full(me):
+            return -60.0
+        if 1086 in hand:
+            return -20.0                             # 既に 1 枚ある
+        return 70.0 if basics <= 1 else 20.0
+    if cid == 648:                                   # オーロンゲ ex
+        if 648 in hand:
+            return -40.0                             # 既に持っている。2 枚目は要らない
+        if 647 in play or (candy and line_base):
+            return 70.0                              # 今すぐ乗せられる
+        if line_base:
+            return 25.0
+        return 0.0                                   # 進化元が無いと置物
+    if cid == 647:                                   # オソマツ
+        if 646 in play and not candy:
+            return 45.0                              # アメが無いなら手で繋ぐ
+        return 5.0
+    if cid == 646:                                   # イタズラコゾウ
+        if not line_base and 647 not in play and 648 not in play:
+            return 55.0                              # ラインが場に無い
+        return 5.0
+    if cid == 1152:                                  # ポケパッド
+        return 35.0 if basics <= 1 else 10.0
+    if cid == 1231:                                  # Dawn
+        if 648 not in play and (647 not in play or not line_base):
+            return 40.0                              # ラインが欠けている
+        return 5.0
+    if cid == 1219:                                  # ペトレル
+        return 20.0                                  # 何にでも化けるので腐りにくい
+    if cid == 1097:                                  # ナイトスターチャー
+        pile = [c.get("id") for c in (me.get("discard") or ()) if c]
+        if any(i in pile for i in (648, 104, 860, 646)):
+            return 35.0                              # 勝ち筋の部品が落ちている
+        return 0.0
+    return 0.0
+
+
+def candy_bonus(cid: int | None, me: dict) -> float:
+    """山札からふしぎなアメを取る価値。
+
+    2 進化を飛ばせるので、オーロンゲ ex の着地が 1 ターン早くなる。ただし
+    2 進化が手に入る見込みが無い場面では、ただの死に札である。デッキに 2 枚しか
+    無いので、抱えすぎも避ける。
+    """
+    if cid != RARE_CANDY:
+        return 0.0
+    hand = [c["id"] for c in (me.get("hand") or ()) if c]
+    if hand.count(RARE_CANDY):
+        return -30.0   # 既に 1 枚ある。デッキに 2 枚しかないので抱え込まない
+    play = [x.get("id") for x in features.in_play(me)]
+    if 648 in hand and (646 in play or 649 in play):
+        return 70.0   # 今すぐ飛べる
+    if 646 in play or 646 in hand:
+        return 35.0   # 進化元は用意できている
+    return 10.0
+
+
 LOOP_PIECES = {
     860: (860, 104),   # ユキワラシ
     104: (860, 104),   # ユキメノコ
@@ -712,11 +805,15 @@ def missing_bonus(cid: int | None, me: dict) -> float:
             # ユキワラシは並んでいる。足りないのはユキメノコそのものなので、
             # サーチはこちらを取りに行く。ユキワラシの 2 枚目に用は無い
             return 70.0 if cid == 104 else -20.0
-        return 60.0               # ラインが場に無い。どちらでもよい
+        # ラインが場に無い。ユキメノコだけ持ってきても場に出せないので、
+        # まずユキワラシを取る
+        return 70.0 if cid == 860 else 30.0
 
     have = ids.count(112)
     if have == 0:
-        return 60.0
+        # ユキメノコより先。ダメカンを運ぶ側が居ないと、配っても自分の場が
+        # 削れるだけになる
+        return 80.0
     if have == 1:
         return 15.0   # マシマシラは 2 体目まで働く。ダメカンを運ぶ回数が増える
     return -20.0      # それ以上はベンチを埋めて、勝ち筋の枠を潰すだけ
