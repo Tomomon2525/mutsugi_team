@@ -556,8 +556,14 @@ def in_play_ids(obs: dict) -> list[int]:
     return out
 
 
+# ベンチの上限。観測を数えると 5 体まで埋まっている試合があり (7〜8 体の
+# 局面も出るので、増やす手段を持つデッキもある)、3 は明らかに低すぎた。
+# ここが 3 だと、ポフィンが -45 になり、ユキワラシを出す枠も無いと判断する。
+BENCH_LIMIT = 5
+
+
 def _bench_full(me: dict) -> bool:
-    return len([p for p in (me.get("bench") or []) if p]) >= 3
+    return len([p for p in (me.get("bench") or []) if p]) >= BENCH_LIMIT
 
 
 def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
@@ -568,7 +574,7 @@ def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
     if cid in FREE_SEARCH and turn <= EARLY_TURNS and cid != 1086:
         return 30.0  # 序盤は盤面を作る速度がそのまま勝率になる
     if cid == 1086:  # Buddy-Buddy Poffin
-        return 35.0 if len(bench) < 3 else -45.0
+        return 35.0 if len(bench) < BENCH_LIMIT else -45.0
     if cid == 1079:  # Rare Candy
         # 手札に 2 進化がいるかで判断する。デッキ固有の ID で判定すると、
         # 同じアメを使う相手デッキ (フーディン等) が常に減点になり、

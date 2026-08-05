@@ -97,6 +97,30 @@ def play(job):
             if act and act.get("id") == MUNKIDORI:
                 s["active_munki"] += 1
 
+            # ユキメノコが場に出ない理由の切り分け
+            hand = [c.get("id") for c in (me.get("hand") or ()) if c]
+            disc = [c.get("id") for c in (me.get("discard") or ()) if c]
+            if SNORUNT in ids and FROSLASS not in ids:
+                s["snorunt_alone"] += 1
+                if FROSLASS in hand:
+                    s["could_evolve"] += 1   # 手札にいるのに進化していない
+            if SNORUNT not in ids and FROSLASS not in ids:
+                s["line_absent"] += 1
+                if SNORUNT in hand:
+                    s["snorunt_in_hand"] += 1  # 手札にいるのに出していない
+            if disc.count(FROSLASS) or disc.count(SNORUNT):
+                s["line_in_discard"] += 1
+
+        # 進化の選択肢が実際に出ているか。出ていないなら規則で止められている
+        # (出したターンには進化できない) 側であって、選ばなかったのではない
+        import policy
+        for o in sel.get("option") or ():
+            if o.get("type") != 9:
+                continue
+            if (policy._card_of(o, sel, me) or {}).get("id") == FROSLASS:
+                s["evolve_offered"] += 1
+                break
+
         # Adrena-Brain が選択肢に出た手番
         for o in sel.get("option") or ():
             if o.get("type") != 10:
@@ -196,6 +220,15 @@ def main() -> None:
     mc = max(1, tot["move_calls"])
     print(f"  動かした個数 平均 {tot['move_counters'] / mc:.2f} / 3  "
           f"({tot['move_calls']} 回)")
+    print("\nユキメノコが場にいない手番の内訳")
+    print(f"  ユキワラシだけ          {tot['snorunt_alone'] / turns:6.1%}"
+          f"  (うち手札にユキメノコ {tot['could_evolve'] / max(1, tot['snorunt_alone']):.1%})")
+    print(f"  ラインが場に無い        {tot['line_absent'] / turns:6.1%}"
+          f"  (うち手札にユキワラシ {tot['snorunt_in_hand'] / max(1, tot['line_absent']):.1%})")
+    print(f"  どちらかがトラッシュ    {tot['line_in_discard'] / turns:6.1%}")
+
+    print(f"  進化の選択肢が出ていた手番  {tot['evolve_offered']}")
+
     print("\nバトル場に出してはいけないものが出ていた手番")
     print(f"  ユキワラシ・ユキメノコ  {tot['active_frost']} ({tot['active_frost'] / turns:.2%})")
     print(f"  マシマシラ              {tot['active_munki']} ({tot['active_munki'] / turns:.2%})")
