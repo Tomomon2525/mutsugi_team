@@ -388,8 +388,25 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
             dmg = effective_damage(opt.get("attackId"), a, me, you)
             s += prof.attack_weight * dmg / 8.0
             tgt = _first(you.get("active"))
+            act = _first(me.get("active"))
             if tgt and dmg and dmg >= (tgt.get("hp") or 0):
-                s += 80 * prof.attack_weight  # きぜつを取れる攻撃は他の何より優先する
+                # 落とせる攻撃は他の何より優先する。取れるサイドの枚数で重みを
+                # 変える。ex は 2 枚、メガ ex は 3 枚 (リプレイで実測)
+                got = features.prize_value(tgt)
+                s += (50 + 35 * got) * prof.attack_weight
+                if got >= len(you.get("prize") or ()):
+                    s += 200.0   # これで決まる
+            else:
+                if dmg <= 0:
+                    # 通らない相手に殴りかかっても番が終わるだけ。無効化の特性を
+                    # 持つ相手や、打点 0 の技がここに来る
+                    s -= 45.0
+                if act and tgt:
+                    # 落とせないまま殴ると、返しでこちらが落ちる。自分が ex なら
+                    # 渡すサイドが重いので、殴らずに下がる手と比べさせる
+                    back = features.best_attack(tgt, you, me)
+                    if back > 0 and back >= (act.get("hp") or 0):
+                        s -= 12.0 * features.prize_value(act)
         return s
 
     if t in (7, 9):  # Play / Evolve
@@ -487,6 +504,17 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         if act and act.get("id") in BENCH_ONLY:
             # 相手のボスの指令などで引きずり出された場合。戻すのを最優先にする
             s += 60 if act.get("id") in HARD_BENCH else 30
+        # 次の番に落とされる ex を、サイドの軽いポケモンと入れ替える。
+        # 落とされる前提なら、渡す枚数が少ないほうを前に置く
+        tgt = _first(you.get("active"))
+        if act and tgt:
+            back = features.best_attack(tgt, you, me)
+            mine = features.prize_value(act)
+            if back > 0 and back >= (act.get("hp") or 0) and mine >= 2:
+                cheap = min((features.prize_value(x)
+                             for x in (me.get("bench") or ()) if x), default=mine)
+                if cheap < mine:
+                    s += 30.0 * (mine - cheap)
         return s
 
     return s

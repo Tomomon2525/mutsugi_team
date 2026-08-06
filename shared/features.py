@@ -161,6 +161,19 @@ def _base_damage(attack_id: int | None, a: dict, poke: dict,
     return dmg
 
 
+def prize_value(poke: dict) -> int:
+    """それを落とすと相手が取れるサイドの枚数。リプレイで実測した値。
+
+      通常 1 枚 / ex 2 枚 / メガ ex 3 枚
+    """
+    c = ptcg.card((poke or {}).get("id")) or {}
+    if c.get("megaEx"):
+        return 3
+    if c.get("ex"):
+        return 2
+    return 1
+
+
 def first(seq):
     for x in seq or []:
         if x:
