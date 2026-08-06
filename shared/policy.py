@@ -196,8 +196,23 @@ BENCH_ONLY = {860: 250.0, 104: 300.0, 112: 90.0}
 # ユキワラシとユキメノコしか残っていない場面で、両方まとめて禁じると禁止が
 # 丸ごと無効になり、ユキメノコが出てしまうことがあった。ユキメノコは特性が
 # 本体なので、失うと勝ち筋が消える。ユキワラシは進化前で、出しても損が小さい。
-BENCH_TIER = {104: 2, 860: 1}
-HARD_BENCH = frozenset(BENCH_TIER)
+# 数字が大きいほど強く避ける。全部が対象になったら誰かを出すしかないので、
+# 悪いほうから順に外していく。
+#   112 マシマシラ  特性はベンチから使える。超エネを入れていないので技が撃てず、
+#                   出したところでサイドを渡すだけ
+#   104 ユキメノコ  特性が本体。落とすと勝ち筋が消える。ただしベンチにもう 1 体
+#                   いるなら、出しても場からは消えないので許容する
+#   860 ユキワラシ  進化前なので損は小さい
+_BENCH_TIER = {112: 3, 104: 3, 860: 1}
+HARD_BENCH = frozenset(_BENCH_TIER)
+
+
+def bench_tier(cid: int | None, me: dict) -> int:
+    t = _BENCH_TIER.get(cid, 0)
+    if cid == 104 and sum(1 for x in features.in_play(me)
+                          if x.get("id") == 104) >= 2:
+        return 2      # 替えが利く。マシマシラを出すよりはまし
+    return t
 # 代償なしで、1 ターンに 1 回だけ使える特性。攻撃を選ぶと番が終わるので、
 # 攻撃より先に使わないとその番のぶんが丸ごと消える。リプレイと自己対戦の
 # どちらでも、使える手番の 4 割しか使えていなかった。
@@ -428,6 +443,10 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
                 s += 45.0 * (1.0 - hp / mx)
         if sel.get("context") in TO_ACTIVE:
             s -= BENCH_ONLY.get(cid, 0.0)
+            if cid == 648 and c is not None and features.best_attack(c, me, you) <= 0:
+                # 撃てないオーロンゲ ex をバトル場に置いても、サイドを 2 枚
+                # 差し出すだけになる。殴れないなら盾はベロバーに任せる
+                s -= 45.0
         elif sel.get("context") == 21 and c is not None and cid is not None:
             # Punk Up の付け先。option type が 3 で来るので Attach の分岐に
             # 入らず、これまで全ての候補が同点だった
@@ -617,12 +636,12 @@ def must_avoid(obs: dict) -> set:
             owner = o.get("playerIndex")
             if owner is not None and owner != mi:
                 continue  # 相手の場を指す選択 (ボスの指令など) は別の話
-            t = BENCH_TIER.get((_card_of(o, sel, me) or {}).get("id"))
+            t = bench_tier((_card_of(o, sel, me) or {}).get("id"), me)
             if t:
                 tier[i] = t
         # まずは全部外す。それだと出せる相手が居なくなる場合に限って、
-        # 損の小さいユキワラシから戻す
-        for lo in (1, 2):
+        # 損の小さいものから順に戻す
+        for lo in (1, 2, 3):
             bad = {i for i, t in tier.items() if t >= lo}
             if bad and len(bad) < len(options):
                 return bad
