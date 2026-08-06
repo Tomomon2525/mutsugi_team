@@ -342,6 +342,37 @@ def _card_of(opt: dict, sel: dict, me: dict) -> dict | None:
     return _in_play(me, area, index)
 
 
+# 相手のポケモンにダメージを置く場面。Shadow Bullet のベンチへの飛び火と、
+# Adrena-Brain で運ぶダメカンが該当する。どちらも 30 (ダメカン 3 個) である
+DAMAGE_TO_FOE = frozenset({13, 15})
+SPLASH = 30
+
+
+def _splash_value(tgt: dict, me: dict, you: dict) -> float:
+    """相手のどのポケモンに 30 を置くか。
+
+    これまでは「HP が低いもの」だけで選んでいた。取れるサイドの枚数と、
+    次の攻撃の射程に入るかを見る。飛び火そのものには弱点が乗らないので、
+    30 は素の値で扱う。射程の判定には弱点を適用する (そちらは通常の攻撃)。
+    """
+    hp = tgt.get("hp") or 0
+    pv = features.prize_value(tgt)
+    if hp <= SPLASH:
+        return 90.0 * pv                    # これで落ちる。他より優先する
+    after = hp - SPLASH
+    act = _first(me.get("active"))
+    if act:
+        fake = {"active": [tgt], "bench": (), "hand": None, "discard": (),
+                "deckCount": 0}
+        reach = features.best_attack(act, me, fake)
+        # 既に届く相手に置いても射程は変わらない。届かないものを届かせる
+        # ことに意味がある
+        if reach > 0 and hp > reach >= after:
+            # 次の攻撃で落とせる射程に入る。瀕死のものほど確実に取れる
+            return 40.0 + 15.0 * pv + max(0.0, 30.0 - after / 10.0)
+    return 12.0 * pv + max(0.0, 25.0 - hp / 10.0)
+
+
 def attach_value(tgt: dict, me: dict) -> float:
     """闇エネルギー 1 個をこのポケモンに付ける価値。
 
@@ -439,11 +470,12 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         c = _card_of(opt, sel, you if foe else me)
         cid = c.get("id") if c else None
         if foe:
-            hp = (c or {}).get("hp")
             s += 0.5 * card_value(cid)
-            if hp is not None:
+            if c is not None and sel.get("context") in DAMAGE_TO_FOE:
+                s += _splash_value(c, me, you)
+            elif (c or {}).get("hp") is not None:
                 # 落としやすいものを狙う。残り HP が低いほど取りやすい
-                s += max(0.0, 40.0 - hp / 8.0)
+                s += max(0.0, 40.0 - c["hp"] / 8.0)
             return s
         if d_ctx := direction(sel.get("context")):
             if d_ctx > 0 and sel.get("context") not in TO_ACTIVE:
