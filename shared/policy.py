@@ -1029,6 +1029,16 @@ def _play_bonus_base(cid: int | None, me: dict, you: dict, turn: int = 0) -> flo
             return 30.0
         return -25.0  # 手札が厚いうちに切ると、揃いかけた進化ラインごと流れる
     if cid == 1182:  # Boss's Orders
+        # 目の前を落とせるなら引きずり出さない。入れ替えた先が固いと、
+        # 取れたはずのきぜつがそのまま消える。リプレイ 90346222 では、
+        # アラカザム (HP140) を 180 で落とせる場面で 2 回これをやって、
+        # HP200 のフェザンディペティ ex に入れ替わり、攻撃せず番を終えていた
+        act = _first(me.get("active"))
+        tgt = _first(you.get("active"))
+        if act and tgt:
+            dmg = features.best_attack(act, me, you)
+            if dmg > 0 and dmg >= (tgt.get("hp") or 0):
+                return -80.0
         for p in (you.get("bench") or []):
             if p and (p.get("hp") or 0) <= 180:
                 return 25.0
