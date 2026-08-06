@@ -107,10 +107,31 @@ def damage_of(attack_id: int | None, a: dict, poke: dict, me: dict, you: dict) -
     本物のエンジンを通るので勝手に 0 になるが、評価関数と方策はこの関数の値で動く。
     通らない相手に殴りかかる手を高く見積もったままだと、探索の入口で候補が歪む。
     """
-    dmg = _base_damage(attack_id, a, poke, me, you)
-    if dmg > 0 and _prevented(ptcg.card(poke.get("id")) or {}, dmg,
-                              first(you.get("active"))):
+    atk = ptcg.card(poke.get("id")) or {}
+    tgt = first(you.get("active"))
+    dmg = _apply_type(_base_damage(attack_id, a, poke, me, you), atk, tgt)
+    if dmg > 0 and _prevented(atk, dmg, tgt):
         return 0
+    return dmg
+
+
+def _apply_type(dmg: int, atk: dict, target: dict) -> int:
+    """弱点と抵抗。倍率はリプレイで実測した。
+
+    Crustle (草) の Superb Scissors 120 が、草弱点のオーロンゲ ex に 240 入って
+    いる。倍率は 2 倍でよい。抵抗は手元のリプレイに例が無く、-30 は現行の
+    ルールからの推定である。
+    """
+    if dmg <= 0 or not target:
+        return dmg
+    et = atk.get("energyType")
+    if et is None:
+        return dmg
+    tc = ptcg.card(target.get("id")) or {}
+    if tc.get("weakness") == et:
+        dmg *= 2
+    elif tc.get("resistance") == et:
+        dmg = max(0, dmg - 30)
     return dmg
 
 
