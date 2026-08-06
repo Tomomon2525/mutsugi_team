@@ -649,6 +649,20 @@ def must_avoid(obs: dict) -> set:
         if early and cid in SEARCH_FIRST and not (cid == 1086 and _bench_full(me)):
             return end
 
+    # 必須の枠を潰すベンチ出しは選ばせない。減点だけだと探索がひっくり返す
+    tight = set()
+    for i, o in enumerate(options):
+        if o.get("type") != 7:
+            continue
+        cid = (_card_of(o, sel, me) or {}).get("id")
+        card = ptcg.card(cid) or {}
+        if card.get("cardType") == 0 and squeezes_bench(cid, me):
+            tight.add(i)
+        elif cid == 1086 and squeezes_bench(1086, me, need=2):
+            tight.add(i)
+    if tight and len(tight) < len(options):
+        return tight
+
     # 明らかに得な手を残したまま番を渡さない。カードは手札にある間は何もしない。
     # リプレイでは、番を終えた 89 局面のうち 38 局面 (43%) が 90 点以上の手を
     # 抱えたままだった。ポケパッド 7、ポフィン 5、ペトレル 5、コゾウ 6 など
@@ -799,6 +813,58 @@ WANT_SCORE = {112: 80.0, 860: 70.0, 104: 70.0, 646: 55.0, 648: 60.0}
 LOOP_PIECES = frozenset(WANT_SCORE)
 
 
+# 最低限これだけは場に居てほしい枠。ここが埋まるまでは、ベンチをそのぶん
+# 空けておく。埋めてしまうと、後から引いても出せない。
+#   ユキメノコの線 (ダメカンを配る)  マシマシラ (運ぶ)  オーロンゲの線 (殴る)
+ESSENTIAL = (
+    (860, 104),
+    (112,),
+    (646, 647, 648),
+)
+
+
+def reserved_slots(me: dict) -> int:
+    """まだ埋まっていない必須枠の数。このぶんベンチを空けておく。"""
+    ids = [x.get("id") for x in features.in_play(me)]
+    return sum(1 for g in ESSENTIAL if not any(i in ids for i in g))
+
+
+def bench_room(me: dict) -> int:
+    """ベンチの空き数。"""
+    filled = len([p for p in (me.get("bench") or []) if p])
+    return max(0, (me.get("benchMax") or 5) - filled)
+
+
+def fills_essential(cid: int | None, me: dict) -> bool:
+    """そのカードが、まだ空いている必須枠を埋めるか。"""
+    if cid is None:
+        return False
+    ids = [x.get("id") for x in features.in_play(me)]
+    for g in ESSENTIAL:
+        if cid in g and not any(i in ids for i in g):
+            return True
+    return False
+
+
+# ポフィンが出せるのは HP70 以下のたね。マシマシラ (HP110) は対象外なので、
+# 埋められる必須枠はユキメノコの線とオーロンゲの線の 2 つだけ
+POFFIN_FILLS = (860, 646)
+
+
+def squeezes_bench(cid: int | None, me: dict, need: int = 1) -> bool:
+    """それを出すとベンチが足りなくなるか。必須枠のぶんは残す。
+
+    need はそのカードが要求する枠の数。ポフィンは 2 体まとめて出す。
+    """
+    if fills_essential(cid, me):
+        return False
+    keep = reserved_slots(me)
+    if cid == 1086:
+        # ポフィン自身が必須枠を埋められるぶんは、空けておく必要が無い
+        keep = max(0, keep - sum(1 for c in POFFIN_FILLS if fills_essential(c, me)))
+    return bench_room(me) - need < keep
+
+
 def board_target(me: dict) -> tuple:
     """今どちらの形を目指すか。オーロンゲ ex が立ったら後半の形に切り替える。"""
     return (LATE_TARGET
@@ -874,6 +940,11 @@ def _play_bonus(cid: int | None, me: dict, you: dict, turn: int = 0,
     """局面によって価値が大きく動くカードだけ補正する。"""
     v = _play_bonus_base(cid, me, you, turn) + missing_bonus(cid, me)
     v += _stadium_bonus(cid, cur, me)
+    # ベンチを埋め切ると、必須の枠を後から引いても出せない
+    if (ptcg.card(cid) or {}).get("cardType") == 0 and squeezes_bench(cid, me):
+        v -= 150.0
+    elif cid == 1086 and squeezes_bench(1086, me, need=2):
+        v -= 150.0   # ポフィンは 2 体まとめて出す
     if cid in DECK_EATERS:
         # 今の残り枚数ではなく、切った後に何枚残るかで判断する。リーリエと
         # スタンプは手札を山札に戻すので、薄い山札でも通ることがある一方、
@@ -891,12 +962,13 @@ def _stadium_bonus(cid: int | None, cur: dict | None, me: dict) -> float:
         return 0.0
     field = cur.get("stadium") or []
     if not field:
-        return 25.0   # 場が空いている。自分だけが使える効果なら得になる
+        return 45.0   # 場が空いている。スパイクタウンのジムは毎ターン
+                      # マリィのポケモンを引けるので、早いほど回数が増える
     owner = (field[0] or {}).get("playerIndex")
     mine = owner == cur.get("yourIndex", 0)
     if mine and (field[0] or {}).get("id") == cid:
         return -80.0  # 同じものを張り直しても何も起きない。手札を捨てるだけ
-    return 45.0       # 相手のものを剥がせる
+    return 80.0       # 相手のものを剥がしたうえで自分のが立つ。二重に得
 
 
 def _play_bonus_base(cid: int | None, me: dict, you: dict, turn: int = 0) -> float:
