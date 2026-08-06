@@ -373,7 +373,7 @@ def _splash_value(tgt: dict, me: dict, you: dict) -> float:
     return 12.0 * pv + max(0.0, 25.0 - hp / 10.0)
 
 
-def attach_value(tgt: dict, me: dict) -> float:
+def attach_value(tgt: dict, me: dict, from_deck: bool = False) -> float:
     """闇エネルギー 1 個をこのポケモンに付ける価値。
 
     手貼りと Punk Up の付け先で同じ判断をするので、1 箇所にまとめてある。
@@ -403,6 +403,16 @@ def attach_value(tgt: dict, me: dict) -> float:
         return 20.0 if n < 2 else -60.0
     if cid in (104, 860):
         return -25.0  # 技を撃たせるつもりが無い。特性はエネルギーを要求しない
+    if from_deck and cid in (646, 647):
+        # Punk Up の余りは、2 体目のオーロンゲ ex の下地にする。Punk Up は
+        # 進化のたびには撃てず、山札の闇エネも尽きるので、飴で 2 体目を立てた
+        # ときに乗っているかどうかで攻撃できるかが決まる。
+        # 1 個ずつばらけるとどれも撃てないので、2 個そろえるほうを優先する
+        if n == 0:
+            return 12.0
+        if n == 1:
+            return 30.0
+        return -40.0
     if n < 2:
         return 10.0
     return -6.0 * (n - 1)  # 3 枚目以降は腐る
@@ -451,6 +461,11 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         s += prof.setup_weight * card_value(cid)
         if t == 9 and cid == 648:
             s += 40  # Punk Up でエネルギー 5 枚が付くので、進化そのものが加速になる
+            # エネルギーが乗っている体を先に進化させる。Shadow Bullet は
+            # {D}{D} なので、2 個乗った体から立てれば その番に撃てる
+            base = _in_play(me, opt.get("inPlayArea"), opt.get("inPlayIndex"))
+            if base is not None:
+                s += 30.0 * min(2, len(base.get("energies") or ()))
         if t == 7:
             s += _play_bonus(cid, me, you, cur.get("turn") or 0, cur)
             if prof.traits.get("hand_hoard"):
@@ -499,7 +514,7 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         elif sel.get("context") == 21 and c is not None and cid is not None:
             # Punk Up の付け先。option type が 3 で来るので Attach の分岐に
             # 入らず、これまで全ての候補が同点だった
-            return s + attach_value(c, me)
+            return s + attach_value(c, me, from_deck=True)
         d = direction(sel.get("context")) if prof.context_signs else 1
         if d < 0 and prof.traits.get("discard_energy"):
             c2 = ptcg.card(cid)
