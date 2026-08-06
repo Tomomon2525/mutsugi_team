@@ -690,9 +690,9 @@ def must_avoid(obs: dict) -> set:
     理由が無いので、その場面の End だけを禁じる。ロールアウトの勝率平均が
     雑音に埋もれても、この手には落ちないようにする。
 
-    もう一つ、ユキワラシとユキメノコをバトル場に出す手も禁じる。この 2 枚は
-    ベンチに居ることで仕事をする。減点だけでは探索がひっくり返してしまうため、
-    他に出せるものがある限り候補から外す。
+    バトル場に上げる相手は、以前は禁止していたが取りやめた。ベロバーとギモーは
+    オーロンゲへの進化元でもあり、盾にして落とされると勝ち筋が削れる。どちらを
+    差し出すのが得かは盤面で変わるので、点数の傾きだけ与えて探索に任せる。
     """
     sel = obs.get("select") or {}
     cur = obs.get("current") or {}
@@ -703,25 +703,9 @@ def must_avoid(obs: dict) -> set:
     me = players[mi]
     options = sel.get("option") or []
 
-    if sel.get("context") in TO_ACTIVE:
-        tier: dict = {}
-        for i, o in enumerate(options):
-            if o.get("type") != 3:
-                continue
-            owner = o.get("playerIndex")
-            if owner is not None and owner != mi:
-                continue  # 相手の場を指す選択 (ボスの指令など) は別の話
-            t = bench_tier((_card_of(o, sel, me) or {}).get("id"), me)
-            if t:
-                tier[i] = t
-        # まずは全部外す。それだと出せる相手が居なくなる場合に限って、
-        # 損の小さいものから順に戻す
-        for lo in (1, 2, 3):
-            bad = {i for i, t in tier.items() if t >= lo}
-            if bad and len(bad) < len(options):
-                return bad
-        return set()
-
+    # バトル場に上げる相手は禁止しない。ベロバーやギモーはオーロンゲへの
+    # 進化元でもあるので、盾にするのが得か損かは盤面で変わる。ルールで
+    # 固めずに探索へ渡す。点数の傾き (BENCH_ONLY) だけは残してある
     you = players[1 - mi]
 
     atk = {i for i, o in enumerate(options) if o.get("type") == 13}
