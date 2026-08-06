@@ -345,7 +345,7 @@ def attach_value(tgt: dict, me: dict) -> float:
         armed = sum(1 for x in features.in_play(me)
                     if x.get("id") == 112
                     and any(e == features.DARK for e in (x.get("energies") or ())))
-        return max(8.0, 50.0 - 10.0 * armed)
+        return max(8.0, 90.0 - 20.0 * armed)
     if cid == 649:
         # Spiky Wheel は闇エネルギー 1 個につき 40 増える。5 個で 220 になり、
         # HP210 の ex を一撃で取れる。他のポケモンと逆に、貯めるほど良い。
@@ -551,6 +551,25 @@ def must_take(obs: dict) -> set:
             out.add(i)
     if out:
         return out
+
+    # エネ 0 のマシマシラへの手貼り。1 個付けば毎ターン 3 個のダメカンを運べる。
+    # Main の中ではトレーナーのほうが点数が高く、方策の順位で 1 位に来るのは
+    # リプレイで 22% しかなかった。手貼りは 1 ターン 1 回なので、後回しにすると
+    # そのまま流れる。
+    #
+    # 例外は、オーロンゲ ex がバトル場でエネ 1 個のとき。あと 1 個で
+    # Shadow Bullet が撃てるので、そちらが優先になる。
+    act = _first(me.get("active"))
+    grim_needs = (act and act.get("id") == 648
+                  and len(act.get("energies") or ()) == 1)
+    if not grim_needs:
+        for i, o in enumerate(options):
+            if o.get("type") != 8:
+                continue
+            tgt = _in_play(me, o.get("inPlayArea"), o.get("inPlayIndex"))
+            if (tgt and tgt.get("id") == 112
+                    and not (tgt.get("energies") or ())):
+                return {i}
 
     # 山札サーチで、今すぐ 2 進化を飛ばせるふしぎなアメ。方策は 1 位に置いて
     # いたが探索が覆していた (リプレイで 13 回中 0 回しか取っていない)
