@@ -556,6 +556,13 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         if act and act.get("id") in BENCH_ONLY:
             # 相手のボスの指令などで引きずり出された場合。戻すのを最優先にする
             s += 60 if act.get("id") in HARD_BENCH else 30
+        # にげるコストぶんのエネルギーを捨てる。オーロンゲ ex は 2 で、
+        # Shadow Bullet の必要量そのものである。盾に下がるつもりが、次に
+        # 立てるオーロンゲの燃料まで捨てることになる
+        if act:
+            cost = (ptcg.card(act.get("id")) or {}).get("retreatCost") or 0
+            s -= 18.0 * min(cost, len(act.get("energies") or ()))
+
         # 次の番に落とされる ex を、サイドの軽いポケモンと入れ替える。
         # 落とされる前提なら、渡す枚数が少ないほうを前に置く
         tgt = _first(you.get("active"))
