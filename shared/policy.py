@@ -402,7 +402,12 @@ def attach_value(tgt: dict, me: dict, from_deck: bool = False) -> float:
         # 2 個目までは保険として弱めに加点する。3 個目以降は無駄でしかない
         return 20.0 if n < 2 else -60.0
     if cid in (104, 860):
-        return -25.0  # 技を撃たせるつもりが無い。特性はエネルギーを要求しない
+        # このデッキのエネルギーは基本闇 10 枚だけである。ユキワラシの Chilly は
+        # {W}、ユキメノコの Frost Smash は {W}{C} なので、何個乗せても一生
+        # 撃てない。Freezing Shroud はエネルギーを要求しない。完全な死に札になる。
+        # リプレイ 13 本では、場のエネルギー 579 個のうち 53 個 (9%) が
+        # こことマシマシラの 2 個目に乗っていた
+        return -100.0
     if from_deck and cid in (646, 647):
         # Punk Up の余りは、2 体目のオーロンゲ ex の下地にする。Punk Up は
         # 進化のたびには撃てず、山札の闇エネも尽きるので、飴で 2 体目を立てた
