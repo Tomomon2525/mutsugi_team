@@ -556,16 +556,30 @@ def score(opt: dict, sel: dict, cur: dict, me: dict, you: dict,
         if act and act.get("id") in BENCH_ONLY:
             # 相手のボスの指令などで引きずり出された場合。戻すのを最優先にする
             s += 60 if act.get("id") in HARD_BENCH else 30
+        tgt = _first(you.get("active"))
+        mine_dmg = features.best_attack(act, me, you) if (act and tgt) else -1
+        stuck = act is not None and tgt is not None and mine_dmg <= 0
+
         # にげるコストぶんのエネルギーを捨てる。オーロンゲ ex は 2 で、
         # Shadow Bullet の必要量そのものである。盾に下がるつもりが、次に
-        # 立てるオーロンゲの燃料まで捨てることになる
+        # 立てるオーロンゲの燃料まで捨てることになる。
+        # ただし今の相手に通らないなら、抱えていても何も生まないので軽くする
         if act:
             cost = (ptcg.card(act.get("id")) or {}).get("retreatCost") or 0
-            s -= 18.0 * min(cost, len(act.get("energies") or ()))
+            pen = 18.0 * min(cost, len(act.get("energies") or ()))
+            s -= pen * (0.35 if stuck else 1.0)
+
+        # 通らない相手の前で居座らない。イワパレスはこちらの ex の攻撃を
+        # すべて無効にするが、オソマツ (60) やベロバー (10) は通る。
+        # ベンチに通る攻撃役がいるなら、下がって入れ替える
+        if stuck:
+            bench_dmg = max((features.best_attack(x, me, you)
+                             for x in (me.get("bench") or ()) if x), default=-1)
+            if bench_dmg > 0:
+                s += 55.0
 
         # 次の番に落とされる ex を、サイドの軽いポケモンと入れ替える。
         # 落とされる前提なら、渡す枚数が少ないほうを前に置く
-        tgt = _first(you.get("active"))
         if act and tgt:
             back = features.best_attack(tgt, you, me)
             mine = features.prize_value(act)
